@@ -24,7 +24,7 @@ apt-get update && apt-get upgrade -y
 
 # 3. Install Dependencies
 echo -e "${YELLOW}Installing dependencies...${NC}"
-apt-get install -y curl git build-essential postgresql postgresql-contrib tzdata
+apt-get install -y curl git build-essential postgresql postgresql-contrib tzdata wget
 
 # 3.1 Configure Timezone (Interactive)
 echo -e "${YELLOW}Please select your Timezone:${NC}"
@@ -40,7 +40,7 @@ else
     echo -e "${GREEN}Node.js is already installed.${NC}"
 fi
 
-# 5. Clone/Update Repo (MOVED BEFORE DB SETUP)
+# 5. Clone/Update Repo
 APP_DIR="/opt/lootlook"
 REPO_URL="https://github.com/JungleeAadmi/Loot-Look.git"
 
@@ -64,13 +64,22 @@ DB_USER="lootlook"
 DB_NAME="lootlook_db"
 echo -e "${YELLOW}Configuring Database...${NC}"
 
+# Helper function to generate .env
+generate_env() {
+    local pass=$1
+    mkdir -p $APP_DIR/backend
+    echo "DATABASE_URL=postgresql://$DB_USER:$pass@localhost:5432/$DB_NAME" > $APP_DIR/backend/.env
+    echo "JWT_SECRET=$(openssl rand -hex 32)" >> $APP_DIR/backend/.env
+    echo "PORT=3000" >> $APP_DIR/backend/.env
+}
+
 # Check if user exists
 if ! sudo -u postgres psql -tAc "SELECT 1 FROM pg_roles WHERE rolname='$DB_USER'" | grep -q 1; then
+    # --- Case A: New Install ---
     echo -e "${YELLOW}Set a DB password (leave empty to auto-generate):${NC}"
     read -sp "Enter Password: " DB_PASS
     echo
 
-    # Auto-generate if empty
     if [ -z "$DB_PASS" ]; then
         echo -e "${YELLOW}Generating random password...${NC}"
         DB_PASS=$(openssl rand -base64 12)
@@ -78,20 +87,40 @@ if ! sudo -u postgres psql -tAc "SELECT 1 FROM pg_roles WHERE rolname='$DB_USER'
 
     sudo -u postgres psql -c "CREATE USER $DB_USER WITH PASSWORD '$DB_PASS';"
     sudo -u postgres psql -c "CREATE DATABASE $DB_NAME OWNER $DB_USER;"
-    
-    # Save creds for the app
-    echo "DATABASE_URL=postgresql://$DB_USER:$DB_PASS@localhost:5432/$DB_NAME" > $APP_DIR/backend/.env
-    echo "JWT_SECRET=$(openssl rand -hex 32)" >> $APP_DIR/backend/.env
-    echo "PORT=3000" >> $APP_DIR/backend/.env
+    generate_env "$DB_PASS"
+
 else
-    echo -e "${GREEN}Database user already exists. Skipping creation.${NC}"
+    # --- Case B: User Exists ---
+    echo -e "${GREEN}Database user already exists.${NC}"
+    
+    # Self-Healing: If user exists but .env is missing (Broken Install), reset password
+    if [ ! -f "$APP_DIR/backend/.env" ]; then
+        echo -e "${YELLOW}Config missing. Resetting database password to recover...${NC}"
+        DB_PASS=$(openssl rand -base64 12)
+        sudo -u postgres psql -c "ALTER USER $DB_USER WITH PASSWORD '$DB_PASS';"
+        generate_env "$DB_PASS"
+        echo -e "${GREEN}Recovery successful.${NC}"
+    fi
 fi
 
-# 7. Install Backend
+# 7. Install Backend & Browser Deps
 echo -e "${YELLOW}Setting up Backend...${NC}"
 cd $APP_DIR/backend
 npm install
-npx playwright install-deps
+
+# --- FIX FOR UBUNTU 25.04 (Plucky) ---
+# Playwright expects libicu74, but 25.04 doesn't have it. We install it manually.
+if ! dpkg -l | grep -q libicu74; then
+    echo -e "${YELLOW}Detected missing libicu74 (common on Ubuntu 25.04). Installing manually...${NC}"
+    wget http://archive.ubuntu.com/ubuntu/pool/main/i/icu/libicu74_74.2-1ubuntu3_amd64.deb
+    dpkg -i libicu74_74.2-1ubuntu3_amd64.deb || apt-get install -f -y
+    rm libicu74_74.2-1ubuntu3_amd64.deb
+fi
+# -------------------------------------
+
+echo -e "${YELLOW}Installing Browser Engine...${NC}"
+# We ignore errors on install-deps because we just manually patched the main issue
+npx playwright install-deps || true
 npx playwright install chromium
 
 # 8. Install & Build Frontend
