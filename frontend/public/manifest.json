@@ -1,0 +1,18 @@
+{
+  "short_name": "LootLook",
+  "name": "LootLook Smart Bookmarks",
+  "icons": [],
+  "start_url": ".",
+  "display": "standalone",
+  "theme_color": "#000000",
+  "background_color": "#0f172a",
+  "share_target": {
+    "action": "/add",
+    "method": "GET",
+    "params": {
+      "title": "title",
+      "text": "text",
+      "url": "url"
+    }
+  }
+}
