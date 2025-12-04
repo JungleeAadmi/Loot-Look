@@ -1,44 +1,123 @@
 #!/bin/bash
-# LootLook Installer Script
-# Usage: sudo bash install.sh
+
+# LootLook Installer
+# Repo: https://github.com/JungleeAadmi/Loot-Look
 
 set -e
 RED='\033[0;31m'
 GREEN='\033[0;32m'
+YELLOW='\033[1;33m'
 NC='\033[0m'
 
 echo -e "${GREEN}Starting LootLook Installation...${NC}"
 
+# 1. Root Check
 if [[ $EUID -ne 0 ]]; then
-   echo -e "${RED}This script must be run as root.${NC}" 
+   echo -e "${RED}Error: This script must be run as root.${NC}" 
    exit 1
 fi
 
-# Update & Install System Deps
+# 2. Update & Upgrade System
+echo -e "${YELLOW}Updating system packages (apt-get upgrade)...${NC}"
+export DEBIAN_FRONTEND=noninteractive
 apt-get update && apt-get upgrade -y
-apt-get install -y curl git build-essential postgresql postgresql-contrib
 
-# Install Node.js 20
+# 3. Install Dependencies & Timezone
+echo -e "${YELLOW}Installing dependencies...${NC}"
+apt-get install -y curl git build-essential postgresql postgresql-contrib tzdata
+
+# 3.1 Configure Timezone (Interactive)
+echo -e "${YELLOW}Please select your Timezone for accurate price history:${NC}"
+unset DEBIAN_FRONTEND
+dpkg-reconfigure tzdata
+
+# 4. Install Node.js 20
 if ! command -v node &> /dev/null; then
+    echo -e "${YELLOW}Installing Node.js 20...${NC}"
     curl -fsSL https://deb.nodesource.com/setup_20.x | bash -
     apt-get install -y nodejs
+else
+    echo -e "${GREEN}Node.js is already installed.${NC}"
 fi
 
-# Setup DB (Interactive)
+# 5. Database Setup
 DB_USER="lootlook"
 DB_NAME="lootlook_db"
+echo -e "${YELLOW}Configuring Database...${NC}"
+
+# Check if user exists
 if ! sudo -u postgres psql -tAc "SELECT 1 FROM pg_roles WHERE rolname='$DB_USER'" | grep -q 1; then
-    read -sp "Enter DB Password: " DB_PASS
+    echo -e "${YELLOW}Please set a password for the database user 'lootlook'.${NC}"
+    read -sp "Enter Password: " DB_PASS
+    echo
     sudo -u postgres psql -c "CREATE USER $DB_USER WITH PASSWORD '$DB_PASS';"
     sudo -u postgres psql -c "CREATE DATABASE $DB_NAME OWNER $DB_USER;"
+    
+    # Save creds for the app
+    mkdir -p /opt/lootlook/backend
+    echo "DATABASE_URL=postgresql://$DB_USER:$DB_PASS@localhost:5432/$DB_NAME" > /opt/lootlook/backend/.env
+    echo "JWT_SECRET=$(openssl rand -hex 32)" >> /opt/lootlook/backend/.env
+    echo "PORT=3000" >> /opt/lootlook/backend/.env
+else
+    echo -e "${GREEN}Database user already exists. Skipping creation.${NC}"
 fi
 
-# Install App Deps
+# 6. Clone/Update Repo
 APP_DIR="/opt/lootlook"
-mkdir -p $APP_DIR
-# (In real deployment, git clone goes here)
+REPO_URL="https://github.com/JungleeAadmi/Loot-Look.git"
 
-echo "Installing Dependencies..."
-# Note: You would run npm install inside backend/frontend here in a real script
+if [ -d "$APP_DIR/.git" ]; then
+    echo -e "${YELLOW}Updating existing installation...${NC}"
+    cd $APP_DIR
+    git pull
+else
+    echo -e "${YELLOW}Cloning repository...${NC}"
+    git clone $REPO_URL $APP_DIR
+fi
 
-echo -e "${GREEN}Installation Complete!${NC}"
+# 7. Install Backend
+echo -e "${YELLOW}Setting up Backend...${NC}"
+cd $APP_DIR/backend
+npm install
+npx playwright install-deps # Required for the scraper browser
+npx playwright install chromium
+
+# 8. Install & Build Frontend
+echo -e "${YELLOW}Building Frontend PWA...${NC}"
+cd $APP_DIR/frontend
+npm install
+npm run build
+
+# 9. Setup Systemd Service
+echo -e "${YELLOW}Creating System Service...${NC}"
+cat <<EOF > /etc/systemd/system/lootlook.service
+[Unit]
+Description=LootLook Service
+After=network.target postgresql.service
+
+[Service]
+Type=simple
+User=root
+WorkingDirectory=$APP_DIR/backend
+ExecStart=/usr/bin/node server.js
+Restart=on-failure
+Environment=NODE_ENV=production
+
+[Install]
+WantedBy=multi-user.target
+EOF
+
+systemctl daemon-reload
+systemctl enable lootlook
+systemctl restart lootlook
+
+# 10. Firewall (Optional)
+if command -v ufw &> /dev/null; then
+    ufw allow 3000/tcp
+fi
+
+IP_ADDR=$(hostname -I | awk '{print $1}')
+echo -e "${GREEN}=========================================${NC}"
+echo -e "${GREEN}   LootLook Installed Successfully!      ${NC}"
+echo -e "${GREEN}=========================================${NC}"
+echo -e "Access your app at: http://$IP_ADDR:3000"
