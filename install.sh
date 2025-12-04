@@ -18,16 +18,16 @@ if [[ $EUID -ne 0 ]]; then
 fi
 
 # 2. Update & Upgrade System
-echo -e "${YELLOW}Updating system packages (apt-get upgrade)...${NC}"
+echo -e "${YELLOW}Updating system packages...${NC}"
 export DEBIAN_FRONTEND=noninteractive
 apt-get update && apt-get upgrade -y
 
-# 3. Install Dependencies & Timezone
+# 3. Install Dependencies
 echo -e "${YELLOW}Installing dependencies...${NC}"
 apt-get install -y curl git build-essential postgresql postgresql-contrib tzdata
 
 # 3.1 Configure Timezone (Interactive)
-echo -e "${YELLOW}Please select your Timezone for accurate price history:${NC}"
+echo -e "${YELLOW}Please select your Timezone:${NC}"
 unset DEBIAN_FRONTEND
 dpkg-reconfigure tzdata
 
@@ -40,31 +40,15 @@ else
     echo -e "${GREEN}Node.js is already installed.${NC}"
 fi
 
-# 5. Database Setup
-DB_USER="lootlook"
-DB_NAME="lootlook_db"
-echo -e "${YELLOW}Configuring Database...${NC}"
-
-# Check if user exists
-if ! sudo -u postgres psql -tAc "SELECT 1 FROM pg_roles WHERE rolname='$DB_USER'" | grep -q 1; then
-    echo -e "${YELLOW}Please set a password for the database user 'lootlook'.${NC}"
-    read -sp "Enter Password: " DB_PASS
-    echo
-    sudo -u postgres psql -c "CREATE USER $DB_USER WITH PASSWORD '$DB_PASS';"
-    sudo -u postgres psql -c "CREATE DATABASE $DB_NAME OWNER $DB_USER;"
-    
-    # Save creds for the app
-    mkdir -p /opt/lootlook/backend
-    echo "DATABASE_URL=postgresql://$DB_USER:$DB_PASS@localhost:5432/$DB_NAME" > /opt/lootlook/backend/.env
-    echo "JWT_SECRET=$(openssl rand -hex 32)" >> /opt/lootlook/backend/.env
-    echo "PORT=3000" >> /opt/lootlook/backend/.env
-else
-    echo -e "${GREEN}Database user already exists. Skipping creation.${NC}"
-fi
-
-# 6. Clone/Update Repo
+# 5. Clone/Update Repo (MOVED BEFORE DB SETUP)
 APP_DIR="/opt/lootlook"
 REPO_URL="https://github.com/JungleeAadmi/Loot-Look.git"
+
+# Fix broken state from previous failed installs
+if [ -d "$APP_DIR" ] && [ ! -d "$APP_DIR/.git" ]; then
+    echo -e "${YELLOW}Detected broken installation. Cleaning up...${NC}"
+    rm -rf "$APP_DIR"
+fi
 
 if [ -d "$APP_DIR/.git" ]; then
     echo -e "${YELLOW}Updating existing installation...${NC}"
@@ -75,11 +59,39 @@ else
     git clone $REPO_URL $APP_DIR
 fi
 
+# 6. Database Setup
+DB_USER="lootlook"
+DB_NAME="lootlook_db"
+echo -e "${YELLOW}Configuring Database...${NC}"
+
+# Check if user exists
+if ! sudo -u postgres psql -tAc "SELECT 1 FROM pg_roles WHERE rolname='$DB_USER'" | grep -q 1; then
+    echo -e "${YELLOW}Set a DB password (leave empty to auto-generate):${NC}"
+    read -sp "Enter Password: " DB_PASS
+    echo
+
+    # Auto-generate if empty
+    if [ -z "$DB_PASS" ]; then
+        echo -e "${YELLOW}Generating random password...${NC}"
+        DB_PASS=$(openssl rand -base64 12)
+    fi
+
+    sudo -u postgres psql -c "CREATE USER $DB_USER WITH PASSWORD '$DB_PASS';"
+    sudo -u postgres psql -c "CREATE DATABASE $DB_NAME OWNER $DB_USER;"
+    
+    # Save creds for the app
+    echo "DATABASE_URL=postgresql://$DB_USER:$DB_PASS@localhost:5432/$DB_NAME" > $APP_DIR/backend/.env
+    echo "JWT_SECRET=$(openssl rand -hex 32)" >> $APP_DIR/backend/.env
+    echo "PORT=3000" >> $APP_DIR/backend/.env
+else
+    echo -e "${GREEN}Database user already exists. Skipping creation.${NC}"
+fi
+
 # 7. Install Backend
 echo -e "${YELLOW}Setting up Backend...${NC}"
 cd $APP_DIR/backend
 npm install
-npx playwright install-deps # Required for the scraper browser
+npx playwright install-deps
 npx playwright install chromium
 
 # 8. Install & Build Frontend
@@ -111,7 +123,7 @@ systemctl daemon-reload
 systemctl enable lootlook
 systemctl restart lootlook
 
-# 10. Firewall (Optional)
+# 10. Firewall
 if command -v ufw &> /dev/null; then
     ufw allow 3000/tcp
 fi
