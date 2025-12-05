@@ -36,20 +36,19 @@ app.get('/api/users/search', authenticateToken, async (req, res) => {
 // --- BOOKMARKS ---
 
 app.post('/api/bookmarks', authenticateToken, async (req, res) => {
-    const { url, clientTime } = req.body;
+    const { url } = req.body; // Removed clientTime
     console.log(`📝 [API] Request to add: ${url}`);
     try {
         const screenshotDir = path.join(__dirname, '../public/screenshots');
         const data = await scrapeBookmark(url, screenshotDir);
         console.log(`   -> Scrape result: ${data.title}`);
 
-        const timestamp = clientTime || new Date().toISOString();
-
+        // FIX: Use Postgres NOW() to ensure Server Time (IST) is used
         const result = await pool.query(`
             INSERT INTO bookmarks (user_id, url, title, image_url, site_name, is_tracked, current_price, currency, created_at)
-            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, NOW())
             RETURNING *
-        `, [req.user.id, url, data.title, data.imagePath, data.site_name, data.isTracked, data.price, data.currency, timestamp]);
+        `, [req.user.id, url, data.title, data.imagePath, data.site_name, data.isTracked, data.price, data.currency]);
 
         if (data.isTracked) {
             await pool.query(`INSERT INTO price_history (bookmark_id, price) VALUES ($1, $2)`, [result.rows[0].id, data.price]);
@@ -63,7 +62,6 @@ app.post('/api/bookmarks', authenticateToken, async (req, res) => {
 
 app.get('/api/bookmarks', authenticateToken, async (req, res) => {
     try {
-        // FIX: logic for shared_with to only show for the owner
         const result = await pool.query(`
             SELECT b.*, 
                    u.username as owner_name,
@@ -149,7 +147,6 @@ app.post('/api/bookmarks/:id/check', authenticateToken, async (req, res) => {
     } catch (err) { res.status(500).json({ error: 'Failed' }); }
 });
 
-// Delete (Also handles "Leaving" a shared bookmark for the receiver)
 app.delete('/api/bookmarks/:id', authenticateToken, async (req, res) => {
     try {
         const result = await pool.query('DELETE FROM bookmarks WHERE id = $1 AND user_id = $2 RETURNING *', [req.params.id, req.user.id]);

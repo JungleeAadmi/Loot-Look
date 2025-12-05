@@ -7,9 +7,12 @@ import axios from 'axios';
 
 const API_URL = '/api';
 
+// Date Formatter: Dynamic (Browser Local Time)
+// This will show IST for you, and EST for someone in New York automatically.
 const formatDate = (dateString) => {
   if (!dateString) return 'Never';
   return new Date(dateString).toLocaleString('en-IN', {
+    // Removed 'timeZone' so it defaults to the User's System Time
     day: '2-digit', month: 'short', year: '2-digit',
     hour: '2-digit', minute: '2-digit', hour12: true
   });
@@ -142,6 +145,7 @@ const Dashboard = ({ user, token, onLogout, openSnip }) => {
     if (!newUrl) return;
     setAdding(true);
     try {
+      // Send device time so the DB gets the exact creation moment
       const clientTime = new Date().toISOString();
       await axios.post(`${API_URL}/bookmarks`, { url: newUrl, clientTime }, { headers: { Authorization: `Bearer ${token}` } });
       setNewUrl('');
@@ -176,11 +180,13 @@ const Dashboard = ({ user, token, onLogout, openSnip }) => {
           <div className="bg-indigo-600/90 p-2.5 rounded-full"><ShoppingBag size={24} className="text-white" /></div>
           <div><h1 className="text-xl font-bold text-white">LootLook</h1><p className="text-xs text-indigo-300">@{user.username}</p></div>
         </div>
+        
         <form onSubmit={handleAdd} className="relative group w-full md:w-[500px]">
           <div className="absolute left-4 top-1/2 -translate-y-1/2 text-slate-400">{adding ? <Loader2 className="animate-spin" size={18} /> : <Plus size={18} />}</div>
           <input type="url" placeholder="Paste link to track..." className="w-full pl-12 pr-28 py-3 rounded-xl bg-slate-900/50 border border-white/10 text-white focus:outline-none focus:ring-2 focus:ring-indigo-500/50" value={newUrl} onChange={(e) => setNewUrl(e.target.value)} required disabled={adding} />
           <button type="submit" disabled={adding} className="absolute right-1.5 top-1.5 bottom-1.5 px-4 rounded-lg bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-bold shadow-md">Add</button>
         </form>
+        
         <div className="w-full md:w-auto flex justify-end gap-2">
           <button onClick={downloadCSV} className="flex items-center gap-2 px-4 py-2 hover:bg-white/5 rounded-full text-slate-400 hover:text-white transition" title="Export CSV"><Download size={18} /></button>
           <button onClick={() => fetchBookmarks(false)} className="flex items-center gap-2 px-4 py-2 hover:bg-white/5 rounded-full text-slate-400 hover:text-white transition" title="Sync Now"><RefreshCw size={18} className={syncing ? 'animate-spin' : ''} /></button>
@@ -265,7 +271,6 @@ const BookmarkCard = ({ data, token, refreshData, onSnip, onShare }) => {
         <div className="absolute top-3 left-3 right-3 flex justify-between">
           <div className="flex gap-1 flex-wrap">
             {data.is_tracked && <span className="bg-emerald-500/90 text-white text-[10px] font-bold px-2 py-1 rounded shadow">TRACKING</span>}
-            {/* Clickable Tags for Sharing Management */}
             {data.shared_by && (
               <button onClick={(e) => {e.stopPropagation(); onShare();}} className="bg-purple-500/90 hover:bg-purple-600 text-white text-[10px] font-bold px-2 py-1 rounded shadow transition">
                 FROM @{data.shared_by}
@@ -297,12 +302,18 @@ const BookmarkCard = ({ data, token, refreshData, onSnip, onShare }) => {
           <div className="flex justify-between"><span>Added:</span> <span className="font-mono text-slate-400">{formatDate(data.created_at)}</span></div>
         </div>
         <div className="grid grid-cols-4 gap-2">
-          <button onClick={(e) => {e.stopPropagation(); handleCheck()}} className="btn-icon p-2 rounded-lg flex justify-center col-span-1" title="Refresh Price"><RefreshCw size={16} className={checking ? 'animate-spin text-indigo-400' : ''} /></button>
+          <button onClick={(e) => {e.stopPropagation(); handleCheck()}} className="btn-icon p-2 rounded-lg flex justify-center col-span-1" title="Refresh Price">
+            <RefreshCw size={16} className={checking ? 'animate-spin text-indigo-400' : ''} />
+          </button>
           <button onClick={onSnip} className="btn-icon p-2 rounded-lg flex justify-center col-span-1" title="View Screenshot"><Eye size={16} /></button>
           <button onClick={onShare} className="btn-icon p-2 rounded-lg flex justify-center col-span-1" title="Share Settings"><Share2 size={16} /></button>
           <button onClick={handleCopy} className="btn-icon p-2 rounded-lg flex justify-center col-span-1" title="Copy Link"><Copy size={16} /></button>
-          <a href={data.url} target="_blank" rel="noreferrer" className="btn-icon p-2 rounded-lg flex justify-center items-center col-span-3 bg-indigo-600/10 hover:bg-indigo-600/20 text-indigo-400 hover:text-indigo-300" title="Open Website"><span className="text-xs font-bold mr-2">OPEN LINK</span> <ExternalLink size={14} /></a>
-          <button onClick={(e) => {e.stopPropagation(); handleDelete()}} className="p-2 rounded-lg bg-red-500/10 hover:bg-red-600 text-red-500 hover:text-white transition flex justify-center col-span-1" title="Delete"><Trash2 size={16} /></button>
+          <a href={data.url} target="_blank" rel="noreferrer" className="btn-icon p-2 rounded-lg flex justify-center items-center col-span-3 bg-indigo-600/10 hover:bg-indigo-600/20 text-indigo-400 hover:text-indigo-300" title="Open Website">
+            <span className="text-xs font-bold mr-2">OPEN LINK</span> <ExternalLink size={14} />
+          </a>
+          <button onClick={(e) => {e.stopPropagation(); handleDelete()}} className="p-2 rounded-lg bg-red-500/10 hover:bg-red-600 text-red-500 hover:text-white transition flex justify-center col-span-1" title="Delete">
+            <Trash2 size={16} />
+          </button>
         </div>
       </div>
     </div>
@@ -384,7 +395,7 @@ const ShareModal = ({ bookmark, token, onClose, refreshData }) => {
           <>
             {currentShares.length > 0 && (
               <div className="mb-6">
-                <h4 className="text-xs font-bold text-slate-500 uppercase tracking-wider mb-2">Shared With</h4>
+                <h4 className="text-xs font-bold text-slate-500 uppercase tracking-wider mb-2">Currently Shared With</h4>
                 <div className="space-y-2">
                   {currentShares.map(u => (
                     <div key={u.id} className="flex justify-between items-center p-2 bg-white/5 rounded-lg border border-white/5">
