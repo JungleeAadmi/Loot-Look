@@ -7,19 +7,21 @@ import axios from 'axios';
 
 const API_URL = '/api';
 
+// Date Formatter: Forces IST (Asia/Kolkata) display
 const formatDate = (dateString) => {
   if (!dateString) return 'Never';
   const d = new Date(dateString);
-  const day = String(d.getDate()).padStart(2, '0');
-  const months = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
-  const mon = months[d.getMonth()];
-  const yr = d.getFullYear();
-  let hours = d.getHours();
-  const minutes = String(d.getMinutes()).padStart(2, '0');
-  const ampm = hours >= 12 ? 'PM' : 'AM';
-  hours = hours % 12;
-  hours = hours ? hours : 12; 
-  return `${day}-${mon}-${yr} ${String(hours).padStart(2, '0')}:${minutes} ${ampm}`;
+  
+  // Use Intl.DateTimeFormat to force timezone conversion to IST
+  return new Intl.DateTimeFormat('en-IN', {
+    timeZone: 'Asia/Kolkata',
+    day: '2-digit',
+    month: 'short',
+    year: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+    hour12: true
+  }).format(d).replace(',', '');
 };
 
 const App = () => {
@@ -200,8 +202,16 @@ const Dashboard = ({ user, token, onLogout, openSnip }) => {
   );
 };
 
+// FIX: New Image Logic using State
 const BookmarkCard = ({ data, token, refreshData, onSnip, onShare }) => {
   const [checking, setChecking] = useState(false);
+  const [imgError, setImgError] = useState(false); // Track error state instead of modifying DOM
+
+  // Reset error when the image URL changes (e.g., after a refresh)
+  useEffect(() => {
+    setImgError(false);
+  }, [data.image_url]);
+
   const fmt = (p) => new Intl.NumberFormat('en-IN', { style: 'currency', currency: data.currency || 'INR', maximumFractionDigits: 0 }).format(p);
 
   const handleCheck = async () => {
@@ -226,7 +236,6 @@ const BookmarkCard = ({ data, token, refreshData, onSnip, onShare }) => {
       await navigator.clipboard.writeText(data.url);
       alert('Link copied!');
     } catch (err) {
-      // Fallback for Safari/HTTP
       const textArea = document.createElement("textarea");
       textArea.value = data.url;
       document.body.appendChild(textArea);
@@ -243,10 +252,20 @@ const BookmarkCard = ({ data, token, refreshData, onSnip, onShare }) => {
   return (
     <div className="glass-card rounded-2xl flex flex-col h-full group">
       <div className="h-64 relative overflow-hidden bg-slate-900/50 cursor-pointer" onClick={onSnip}>
-        {data.image_url ? (
-          <img src={data.image_url} alt={data.title} className="w-full h-full object-cover group-hover:scale-105 transition duration-700" onError={(e) => {e.target.style.display='none'; e.target.nextSibling.style.display='flex'}} />
-        ) : null}
-        <div className="hidden absolute inset-0 flex items-center justify-center bg-slate-800"><ShoppingBag size={32} className="text-slate-600" /></div>
+        {/* Conditional Rendering based on State */}
+        {data.image_url && !imgError ? (
+          <img 
+            src={data.image_url} 
+            alt={data.title} 
+            className="w-full h-full object-cover group-hover:scale-105 transition duration-700" 
+            onError={() => setImgError(true)} // Set state on error
+          />
+        ) : (
+          <div className="absolute inset-0 flex items-center justify-center bg-slate-800">
+            <ShoppingBag size={32} className="text-slate-600" />
+          </div>
+        )}
+        
         <div className="absolute top-3 left-3 right-3 flex justify-between">
           <div className="flex gap-1 flex-wrap">
             {data.is_tracked && <span className="bg-emerald-500/90 text-white text-[10px] font-bold px-2 py-1 rounded shadow">TRACKING</span>}
