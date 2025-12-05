@@ -13,7 +13,7 @@ curl -sSL https://raw.githubusercontent.com/JungleeAadmi/Loot-Look/main/install.
 **Update**
 
 ```
-curl -sSL https://raw.githubusercontent.com/JungleeAadmi/Loot-Look/main/update.sh | bash
+curl -O https://raw.githubusercontent.com/JungleeAadmi/Loot-Look/main/update.sh && sudo bash update.sh
 
 ```
 **Uninstall**
