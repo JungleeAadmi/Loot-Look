@@ -3,7 +3,6 @@ const cheerio = require('cheerio');
 const fs = require('fs');
 const path = require('path');
 
-// Mobile User Agent (Pixel 7) - Gets better prices, fewer popups
 const MOBILE_UA = 'Mozilla/5.0 (Linux; Android 14; Pixel 7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.6099.193 Mobile Safari/537.36';
 
 async function scrapeBookmark(url, screenshotDir) {
@@ -20,7 +19,6 @@ async function scrapeBookmark(url, screenshotDir) {
     };
 
     try {
-        // Safe hostname parsing
         try {
             data.site_name = new URL(url).hostname.replace('www.', '');
         } catch (e) { data.site_name = 'Web'; }
@@ -30,7 +28,7 @@ async function scrapeBookmark(url, screenshotDir) {
             args: [
                 '--no-sandbox', 
                 '--disable-setuid-sandbox',
-                '--disable-dev-shm-usage', // <--- CRITICAL FIX FOR LXC MEMORY CRASHES
+                '--disable-dev-shm-usage',
                 '--disable-gpu'
             ]
         });
@@ -50,12 +48,11 @@ async function scrapeBookmark(url, screenshotDir) {
         console.log(`   -> Navigating to ${url}...`);
         await page.goto(url, { waitUntil: 'domcontentloaded', timeout: 60000 });
         
-        // Anti-Popup Logic
+        // Anti-Popup
         const safeClick = async (selector) => {
             try {
                 const el = page.locator(selector).first();
                 if (await el.isVisible({ timeout: 2000 })) {
-                    console.log(`   -> Clicking popup: ${selector}`);
                     await el.click({ timeout: 1000 });
                     await page.waitForTimeout(500);
                 }
@@ -67,9 +64,19 @@ async function scrapeBookmark(url, screenshotDir) {
         await safeClick('button:has-text("Confirm")');
         await safeClick('[aria-label="Close"]');
 
-        // Scroll & Screenshot
-        await page.evaluate(() => window.scrollBy(0, 600));
+        // --- SCROLL LOGIC FIX ---
+        // 1. Scroll down to trigger lazy loading images
+        await page.evaluate(async () => {
+            window.scrollTo(0, document.body.scrollHeight / 2);
+            await new Promise(r => setTimeout(r, 1000));
+            window.scrollTo(0, document.body.scrollHeight);
+        });
         await page.waitForTimeout(2000); 
+
+        // 2. Scroll back UP to top for the perfect screenshot
+        await page.evaluate(() => window.scrollTo(0, 0));
+        await page.waitForTimeout(1000); 
+        // ------------------------
 
         const fileName = `${Date.now()}_${Math.floor(Math.random()*1000)}.jpg`;
         const filePath = path.join(screenshotDir, fileName);
@@ -79,7 +86,6 @@ async function scrapeBookmark(url, screenshotDir) {
         data.imagePath = `/screenshots/${fileName}`;
         console.log(`   -> Screenshot saved.`);
 
-        // Extraction
         const content = await page.content();
         const $ = cheerio.load(content);
         
@@ -87,7 +93,7 @@ async function scrapeBookmark(url, screenshotDir) {
                      $('title').text().trim() || 
                      data.site_name;
 
-        // Price Extraction (Layer 1: JSON-LD)
+        // Price Layer 1: JSON-LD
         $('script[type="application/ld+json"]').each((i, el) => {
             try {
                 const json = JSON.parse($(el).html());
@@ -98,50 +104,31 @@ async function scrapeBookmark(url, screenshotDir) {
                     if (offer) {
                         data.price = parseFloat(offer.price);
                         if (offer.priceCurrency) data.currency = offer.priceCurrency;
-                        console.log(`   -> Found JSON-LD Price: ${data.price}`);
                     }
                 }
             } catch (e) {}
         });
 
-        // Price Extraction (Layer 2: Selectors)
+        // Price Layer 2: Selectors
         if (!data.price) {
-            const selectors = [
-                '.a-price-whole',           // Amazon
-                'div[class*="_30jeq3"]',    // Flipkart
-                '.pdp-price',               // Myntra
-                'h4:contains("₹")',         // Meesho
-                '.price', '[class*="price"]' // Generic
-            ];
-
+            const selectors = ['.a-price-whole', 'div[class*="_30jeq3"]', '.pdp-price', 'h4:contains("₹")', '.price', '[class*="price"]'];
             for (const sel of selectors) {
                 const text = $(sel).first().text();
                 const p = parsePrice(text);
-                if (p) {
-                    data.price = p;
-                    console.log(`   -> Found Selector Price: ${p} (via ${sel})`);
-                    break;
-                }
+                if (p) { data.price = p; break; }
             }
         }
 
-        // Price Extraction (Layer 3: Meta)
+        // Price Layer 3: Meta
         if (!data.price) {
             const metaPrice = $('meta[property="product:price:amount"]').attr('content');
-            if (metaPrice) {
-                data.price = parseFloat(metaPrice);
-                console.log(`   -> Found Meta Price: ${data.price}`);
-            }
+            if (metaPrice) data.price = parseFloat(metaPrice);
         }
 
-        if (data.price && !isNaN(data.price)) {
-            data.isTracked = true;
-        }
+        if (data.price && !isNaN(data.price)) data.isTracked = true;
 
     } catch (error) {
         console.error(`❌ [Scraper Error] ${url}:`, error.message);
-        // Return whatever data we gathered so far (e.g. at least the title/url)
-        // This prevents the "Failed to add" error on frontend
     } finally {
         if (browser) await browser.close();
     }

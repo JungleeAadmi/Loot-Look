@@ -7,22 +7,18 @@ import axios from 'axios';
 
 const API_URL = '/api';
 
-// Date Formatter: DD-MMM-YYYY HH:MM AM/PM
 const formatDate = (dateString) => {
   if (!dateString) return 'Never';
   const d = new Date(dateString);
-  
   const day = String(d.getDate()).padStart(2, '0');
   const months = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
   const mon = months[d.getMonth()];
   const yr = d.getFullYear();
-  
   let hours = d.getHours();
   const minutes = String(d.getMinutes()).padStart(2, '0');
   const ampm = hours >= 12 ? 'PM' : 'AM';
   hours = hours % 12;
-  hours = hours ? hours : 12; // the hour '0' should be '12'
-  
+  hours = hours ? hours : 12; 
   return `${day}-${mon}-${yr} ${String(hours).padStart(2, '0')}:${minutes} ${ampm}`;
 };
 
@@ -144,7 +140,7 @@ const Dashboard = ({ user, token, onLogout, openSnip }) => {
 
   useEffect(() => {
     fetchBookmarks();
-    const interval = setInterval(() => fetchBookmarks(true), 15000); // Auto-poll
+    const interval = setInterval(() => fetchBookmarks(true), 15000); 
     return () => clearInterval(interval);
   }, []);
 
@@ -162,34 +158,26 @@ const Dashboard = ({ user, token, onLogout, openSnip }) => {
 
   return (
     <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
-      {/* Header */}
       <nav className="flex flex-col md:flex-row justify-between items-center mb-12 gap-6 glass-panel p-4 rounded-2xl md:rounded-full">
         <div className="flex items-center gap-4 w-full md:w-auto">
           <div className="bg-indigo-600/90 p-2.5 rounded-full"><ShoppingBag size={24} className="text-white" /></div>
           <div><h1 className="text-xl font-bold text-white">LootLook</h1><p className="text-xs text-indigo-300">@{user.username}</p></div>
         </div>
-        
-        {/* Add Bar */}
         <form onSubmit={handleAdd} className="relative group w-full md:w-[500px]">
           <div className="absolute left-4 top-1/2 -translate-y-1/2 text-slate-400">{adding ? <Loader2 className="animate-spin" size={18} /> : <Plus size={18} />}</div>
           <input type="url" placeholder="Paste link to track..." className="w-full pl-12 pr-28 py-3 rounded-xl bg-slate-900/50 border border-white/10 text-white focus:outline-none focus:ring-2 focus:ring-indigo-500/50" value={newUrl} onChange={(e) => setNewUrl(e.target.value)} required disabled={adding} />
           <button type="submit" disabled={adding} className="absolute right-1.5 top-1.5 bottom-1.5 px-4 rounded-lg bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-bold shadow-md">Add</button>
         </form>
-        
-        {/* Controls */}
         <div className="w-full md:w-auto flex justify-end gap-2">
-          {/* Sync Button */}
           <button onClick={() => fetchBookmarks(false)} className="flex items-center gap-2 px-4 py-2 hover:bg-white/5 rounded-full text-slate-400 hover:text-white transition" title="Sync Now">
             <RefreshCw size={18} className={syncing ? 'animate-spin' : ''} />
           </button>
-          
           <button onClick={onLogout} className="flex items-center gap-2 text-xs font-semibold text-slate-400 hover:text-white px-4 py-2 hover:bg-white/5 rounded-full border border-white/5">
             <LogOut size={16} /> Log Out
           </button>
         </div>
       </nav>
 
-      {/* Grid */}
       {loading ? (
         <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-6">{[1,2,3,4].map(i => <div key={i} className="h-80 rounded-2xl bg-white/5 animate-pulse"></div>)}</div>
       ) : (
@@ -207,13 +195,7 @@ const Dashboard = ({ user, token, onLogout, openSnip }) => {
         </div>
       )}
 
-      {shareModalData && (
-        <ShareModal 
-          bookmark={shareModalData} 
-          token={token} 
-          onClose={() => setShareModalData(null)} 
-        />
-      )}
+      {shareModalData && <ShareModal bookmark={shareModalData} token={token} onClose={() => setShareModalData(null)} />}
     </div>
   );
 };
@@ -239,8 +221,20 @@ const BookmarkCard = ({ data, token, refreshData, onSnip, onShare }) => {
     } catch (err) {}
   };
 
-  const handleCopy = () => {
-    navigator.clipboard.writeText(data.url).then(() => alert('Link copied!'));
+  const handleCopy = async () => {
+    try {
+      await navigator.clipboard.writeText(data.url);
+      alert('Link copied!');
+    } catch (err) {
+      // Fallback for Safari/HTTP
+      const textArea = document.createElement("textarea");
+      textArea.value = data.url;
+      document.body.appendChild(textArea);
+      textArea.select();
+      document.execCommand('copy');
+      document.body.removeChild(textArea);
+      alert('Link copied!');
+    }
   };
 
   const priceColor = data.previous_price && data.current_price < data.previous_price ? 'text-emerald-400' : 
@@ -253,7 +247,6 @@ const BookmarkCard = ({ data, token, refreshData, onSnip, onShare }) => {
           <img src={data.image_url} alt={data.title} className="w-full h-full object-cover group-hover:scale-105 transition duration-700" onError={(e) => {e.target.style.display='none'; e.target.nextSibling.style.display='flex'}} />
         ) : null}
         <div className="hidden absolute inset-0 flex items-center justify-center bg-slate-800"><ShoppingBag size={32} className="text-slate-600" /></div>
-        
         <div className="absolute top-3 left-3 right-3 flex justify-between">
           <div className="flex gap-1 flex-wrap">
             {data.is_tracked && <span className="bg-emerald-500/90 text-white text-[10px] font-bold px-2 py-1 rounded shadow">TRACKING</span>}
@@ -264,7 +257,6 @@ const BookmarkCard = ({ data, token, refreshData, onSnip, onShare }) => {
 
       <div className="p-5 flex flex-col flex-grow">
         <h3 className="text-sm font-medium text-slate-200 line-clamp-2 h-10 mb-4 leading-snug" title={data.title}>{data.title}</h3>
-        
         <div className="mt-auto mb-4">
           {data.is_tracked ? (
             <div>
@@ -275,23 +267,17 @@ const BookmarkCard = ({ data, token, refreshData, onSnip, onShare }) => {
             <span className="text-sm font-medium text-slate-400">Bookmark</span>
           )}
         </div>
-
         <div className="text-[10px] text-slate-500 mb-4 space-y-0.5 border-t border-white/5 pt-2">
           <div className="flex justify-between"><span>Updated:</span> <span className="font-mono text-slate-400">{formatDate(data.last_checked)}</span></div>
           <div className="flex justify-between"><span>Added:</span> <span className="font-mono text-slate-400">{formatDate(data.created_at)}</span></div>
         </div>
-
-        {/* Action Grid - 2 Rows */}
         <div className="grid grid-cols-4 gap-2">
-          {/* Row 1 */}
           <button onClick={(e) => {e.stopPropagation(); handleCheck()}} className="btn-icon p-2 rounded-lg flex justify-center col-span-1" title="Refresh Price">
             <RefreshCw size={16} className={checking ? 'animate-spin text-indigo-400' : ''} />
           </button>
           <button onClick={onSnip} className="btn-icon p-2 rounded-lg flex justify-center col-span-1" title="View Screenshot"><Eye size={16} /></button>
           <button onClick={onShare} className="btn-icon p-2 rounded-lg flex justify-center col-span-1" title="Share"><Share2 size={16} /></button>
           <button onClick={handleCopy} className="btn-icon p-2 rounded-lg flex justify-center col-span-1" title="Copy Link"><Copy size={16} /></button>
-          
-          {/* Row 2 */}
           <a href={data.url} target="_blank" rel="noreferrer" className="btn-icon p-2 rounded-lg flex justify-center items-center col-span-3 bg-indigo-600/10 hover:bg-indigo-600/20 text-indigo-400 hover:text-indigo-300" title="Open Website">
             <span className="text-xs font-bold mr-2">OPEN LINK</span> <ExternalLink size={14} />
           </a>

@@ -20,7 +20,7 @@ startCronJobs();
 app.post('/api/auth/register', register);
 app.post('/api/auth/login', login);
 
-// --- SEARCH USERS ---
+// --- SEARCH ---
 app.get('/api/users/search', authenticateToken, async (req, res) => {
     const { q } = req.query;
     try {
@@ -34,40 +34,31 @@ app.get('/api/users/search', authenticateToken, async (req, res) => {
 
 // --- BOOKMARKS ---
 
-// 1. Add Bookmark (Updated with logging)
 app.post('/api/bookmarks', authenticateToken, async (req, res) => {
     const { url } = req.body;
     console.log(`📝 [API] Request to add: ${url}`);
     
     try {
         const screenshotDir = path.join(__dirname, '../public/screenshots');
-        
-        // 1. Scrape
         const data = await scrapeBookmark(url, screenshotDir);
-        console.log(`   -> Scrape result: ${data.title} (Price: ${data.price})`);
+        console.log(`   -> Scrape result: ${data.title}`);
 
-        // 2. Insert into DB
         const result = await pool.query(`
             INSERT INTO bookmarks (user_id, url, title, image_url, site_name, is_tracked, current_price, currency)
             VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
             RETURNING *
         `, [req.user.id, url, data.title, data.imagePath, data.site_name, data.isTracked, data.price, data.currency]);
 
-        // 3. Track History
         if (data.isTracked) {
             await pool.query(`INSERT INTO price_history (bookmark_id, price) VALUES ($1, $2)`, [result.rows[0].id, data.price]);
         }
-        
-        console.log("   -> Saved to DB successfully.");
         res.json(result.rows[0]);
-
     } catch (err) { 
-        console.error("❌ [API Error] Failed to add bookmark:", err); // Prints full error to console
-        res.status(500).json({ error: 'Failed to add link. Check server logs.' }); 
+        console.error("❌ [API Error] Add failed:", err);
+        res.status(500).json({ error: 'Failed to add link.' }); 
     }
 });
 
-// 2. Get All
 app.get('/api/bookmarks', authenticateToken, async (req, res) => {
     try {
         const result = await pool.query(`
@@ -87,7 +78,6 @@ app.get('/api/bookmarks', authenticateToken, async (req, res) => {
     } catch (err) { res.status(500).json({ error: 'Failed' }); }
 });
 
-// 3. Share
 app.post('/api/bookmarks/:id/share', authenticateToken, async (req, res) => {
     const { receiverId } = req.body;
     try {
@@ -102,30 +92,39 @@ app.post('/api/bookmarks/:id/share', authenticateToken, async (req, res) => {
     } catch (err) { res.status(500).json({ error: 'Share failed' }); }
 });
 
-// 4. Force Check
+// FIX: Always update title/image even if price is missing
 app.post('/api/bookmarks/:id/check', authenticateToken, async (req, res) => {
     try {
         const bm = await pool.query('SELECT * FROM bookmarks WHERE id = $1', [req.params.id]);
         if (bm.rows.length === 0) return res.status(404).send('Not found');
 
-        const oldPrice = parseFloat(bm.rows[0].current_price || 0);
         const screenshotDir = path.join(__dirname, '../public/screenshots');
         const data = await scrapeBookmark(bm.rows[0].url, screenshotDir);
 
         if (data.price) {
+            // Update Price + Details
+            const oldPrice = parseFloat(bm.rows[0].current_price || 0);
             await pool.query(`
                 UPDATE bookmarks 
-                SET current_price = $1, previous_price = $2, last_checked = NOW() 
-                WHERE id = $3
-            `, [data.price, oldPrice, req.params.id]);
+                SET current_price = $1, previous_price = $2, 
+                    title = $3, image_url = $4, last_checked = NOW() 
+                WHERE id = $5
+            `, [data.price, oldPrice, data.title, data.imagePath, req.params.id]);
             
             await pool.query('INSERT INTO price_history (bookmark_id, price) VALUES ($1, $2)', [req.params.id, data.price]);
+        } else {
+            // Update Details ONLY (Refresh snip/title for non-tracked items)
+            await pool.query(`
+                UPDATE bookmarks 
+                SET title = $1, image_url = $2, last_checked = NOW() 
+                WHERE id = $3
+            `, [data.title, data.imagePath, req.params.id]);
         }
+
         res.json({ message: 'Updated', price: data.price });
     } catch (err) { res.status(500).json({ error: 'Failed' }); }
 });
 
-// 5. Delete
 app.delete('/api/bookmarks/:id', authenticateToken, async (req, res) => {
     try {
         const result = await pool.query('DELETE FROM bookmarks WHERE id = $1 AND user_id = $2 RETURNING *', [req.params.id, req.user.id]);
