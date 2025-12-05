@@ -1,27 +1,21 @@
 import React, { useState, useEffect } from 'react';
 import { 
   LogOut, ExternalLink, RefreshCw, ShoppingBag, Link as LinkIcon, Loader2,
-  Share2, Trash2, Eye, X, Plus, Search, Copy
+  Share2, Trash2, Eye, X, Plus, Search, Copy, Download, UserMinus
 } from 'lucide-react';
 import axios from 'axios';
 
 const API_URL = '/api';
 
-// Date Formatter: Forces IST (Asia/Kolkata) display
+// Date Formatter: Strict IST
 const formatDate = (dateString) => {
   if (!dateString) return 'Never';
   const d = new Date(dateString);
-  
-  // Use Intl.DateTimeFormat to force timezone conversion to IST
-  return new Intl.DateTimeFormat('en-IN', {
+  return d.toLocaleString('en-IN', {
     timeZone: 'Asia/Kolkata',
-    day: '2-digit',
-    month: 'short',
-    year: '2-digit',
-    hour: '2-digit',
-    minute: '2-digit',
-    hour12: true
-  }).format(d).replace(',', '');
+    day: '2-digit', month: 'short', year: '2-digit',
+    hour: '2-digit', minute: '2-digit', hour12: true
+  });
 };
 
 const App = () => {
@@ -158,6 +152,29 @@ const Dashboard = ({ user, token, onLogout, openSnip }) => {
     finally { setAdding(false); }
   };
 
+  // CSV Export Logic
+  const downloadCSV = () => {
+    const headers = ["Title", "Price", "URL", "Added Date", "Last Checked"];
+    const rows = bookmarks.map(b => [
+      `"${b.title.replace(/"/g, '""')}"`, // Escape quotes
+      b.current_price || 0,
+      b.url,
+      formatDate(b.created_at),
+      formatDate(b.last_checked)
+    ]);
+    
+    const csvContent = "data:text/csv;charset=utf-8," + 
+      [headers.join(","), ...rows.map(e => e.join(","))].join("\n");
+      
+    const encodedUri = encodeURI(csvContent);
+    const link = document.createElement("a");
+    link.setAttribute("href", encodedUri);
+    link.setAttribute("download", `lootlook_export_${new Date().toISOString().slice(0,10)}.csv`);
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+  };
+
   return (
     <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
       <nav className="flex flex-col md:flex-row justify-between items-center mb-12 gap-6 glass-panel p-4 rounded-2xl md:rounded-full">
@@ -165,15 +182,24 @@ const Dashboard = ({ user, token, onLogout, openSnip }) => {
           <div className="bg-indigo-600/90 p-2.5 rounded-full"><ShoppingBag size={24} className="text-white" /></div>
           <div><h1 className="text-xl font-bold text-white">LootLook</h1><p className="text-xs text-indigo-300">@{user.username}</p></div>
         </div>
+        
         <form onSubmit={handleAdd} className="relative group w-full md:w-[500px]">
           <div className="absolute left-4 top-1/2 -translate-y-1/2 text-slate-400">{adding ? <Loader2 className="animate-spin" size={18} /> : <Plus size={18} />}</div>
           <input type="url" placeholder="Paste link to track..." className="w-full pl-12 pr-28 py-3 rounded-xl bg-slate-900/50 border border-white/10 text-white focus:outline-none focus:ring-2 focus:ring-indigo-500/50" value={newUrl} onChange={(e) => setNewUrl(e.target.value)} required disabled={adding} />
           <button type="submit" disabled={adding} className="absolute right-1.5 top-1.5 bottom-1.5 px-4 rounded-lg bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-bold shadow-md">Add</button>
         </form>
+        
         <div className="w-full md:w-auto flex justify-end gap-2">
+          {/* Export CSV */}
+          <button onClick={downloadCSV} className="flex items-center gap-2 px-4 py-2 hover:bg-white/5 rounded-full text-slate-400 hover:text-white transition" title="Export CSV">
+            <Download size={18} />
+          </button>
+
+          {/* Sync */}
           <button onClick={() => fetchBookmarks(false)} className="flex items-center gap-2 px-4 py-2 hover:bg-white/5 rounded-full text-slate-400 hover:text-white transition" title="Sync Now">
             <RefreshCw size={18} className={syncing ? 'animate-spin' : ''} />
           </button>
+          
           <button onClick={onLogout} className="flex items-center gap-2 text-xs font-semibold text-slate-400 hover:text-white px-4 py-2 hover:bg-white/5 rounded-full border border-white/5">
             <LogOut size={16} /> Log Out
           </button>
@@ -191,7 +217,7 @@ const Dashboard = ({ user, token, onLogout, openSnip }) => {
               token={token}
               refreshData={() => fetchBookmarks(true)}
               onSnip={() => openSnip(bm.image_url)}
-              onShare={() => setShareModalData({ id: bm.id, title: bm.title })}
+              onShare={() => setShareModalData(bm)}
             />
           ))}
         </div>
@@ -202,15 +228,11 @@ const Dashboard = ({ user, token, onLogout, openSnip }) => {
   );
 };
 
-// FIX: New Image Logic using State
 const BookmarkCard = ({ data, token, refreshData, onSnip, onShare }) => {
   const [checking, setChecking] = useState(false);
-  const [imgError, setImgError] = useState(false); // Track error state instead of modifying DOM
+  const [imgError, setImgError] = useState(false);
 
-  // Reset error when the image URL changes (e.g., after a refresh)
-  useEffect(() => {
-    setImgError(false);
-  }, [data.image_url]);
+  useEffect(() => { setImgError(false); }, [data.image_url]);
 
   const fmt = (p) => new Intl.NumberFormat('en-IN', { style: 'currency', currency: data.currency || 'INR', maximumFractionDigits: 0 }).format(p);
 
@@ -252,24 +274,17 @@ const BookmarkCard = ({ data, token, refreshData, onSnip, onShare }) => {
   return (
     <div className="glass-card rounded-2xl flex flex-col h-full group">
       <div className="h-64 relative overflow-hidden bg-slate-900/50 cursor-pointer" onClick={onSnip}>
-        {/* Conditional Rendering based on State */}
         {data.image_url && !imgError ? (
-          <img 
-            src={data.image_url} 
-            alt={data.title} 
-            className="w-full h-full object-cover group-hover:scale-105 transition duration-700" 
-            onError={() => setImgError(true)} // Set state on error
-          />
+          <img src={data.image_url} alt={data.title} className="w-full h-full object-cover group-hover:scale-105 transition duration-700" onError={() => setImgError(true)} />
         ) : (
-          <div className="absolute inset-0 flex items-center justify-center bg-slate-800">
-            <ShoppingBag size={32} className="text-slate-600" />
-          </div>
+          <div className="absolute inset-0 flex items-center justify-center bg-slate-800"><ShoppingBag size={32} className="text-slate-600" /></div>
         )}
         
         <div className="absolute top-3 left-3 right-3 flex justify-between">
           <div className="flex gap-1 flex-wrap">
             {data.is_tracked && <span className="bg-emerald-500/90 text-white text-[10px] font-bold px-2 py-1 rounded shadow">TRACKING</span>}
             {data.shared_by && <span className="bg-purple-500/90 text-white text-[10px] font-bold px-2 py-1 rounded shadow">FROM @{data.shared_by}</span>}
+            {data.shared_with && <span className="bg-blue-500/90 text-white text-[10px] font-bold px-2 py-1 rounded shadow">TO @{data.shared_with}</span>}
           </div>
         </div>
       </div>
@@ -295,7 +310,7 @@ const BookmarkCard = ({ data, token, refreshData, onSnip, onShare }) => {
             <RefreshCw size={16} className={checking ? 'animate-spin text-indigo-400' : ''} />
           </button>
           <button onClick={onSnip} className="btn-icon p-2 rounded-lg flex justify-center col-span-1" title="View Screenshot"><Eye size={16} /></button>
-          <button onClick={onShare} className="btn-icon p-2 rounded-lg flex justify-center col-span-1" title="Share"><Share2 size={16} /></button>
+          <button onClick={onShare} className="btn-icon p-2 rounded-lg flex justify-center col-span-1" title="Share Settings"><Share2 size={16} /></button>
           <button onClick={handleCopy} className="btn-icon p-2 rounded-lg flex justify-center col-span-1" title="Copy Link"><Copy size={16} /></button>
           <a href={data.url} target="_blank" rel="noreferrer" className="btn-icon p-2 rounded-lg flex justify-center items-center col-span-3 bg-indigo-600/10 hover:bg-indigo-600/20 text-indigo-400 hover:text-indigo-300" title="Open Website">
             <span className="text-xs font-bold mr-2">OPEN LINK</span> <ExternalLink size={14} />
@@ -312,8 +327,17 @@ const BookmarkCard = ({ data, token, refreshData, onSnip, onShare }) => {
 const ShareModal = ({ bookmark, token, onClose }) => {
   const [query, setQuery] = useState('');
   const [users, setUsers] = useState([]);
+  const [currentShares, setCurrentShares] = useState([]);
   const [loading, setLoading] = useState(false);
 
+  // Fetch who it is shared with
+  useEffect(() => {
+    axios.get(`${API_URL}/bookmarks/${bookmark.id}/shares`, { headers: { Authorization: `Bearer ${token}` } })
+      .then(res => setCurrentShares(res.data))
+      .catch(() => {});
+  }, []);
+
+  // Search logic
   useEffect(() => {
     if (query.length < 2) return setUsers([]);
     const timer = setTimeout(async () => {
@@ -329,25 +353,59 @@ const ShareModal = ({ bookmark, token, onClose }) => {
   const shareWith = async (userId) => {
     try {
       await axios.post(`${API_URL}/bookmarks/${bookmark.id}/share`, { receiverId: userId }, { headers: { Authorization: `Bearer ${token}` } });
-      alert(`Shared with user!`);
-      onClose();
+      // Refresh list
+      const res = await axios.get(`${API_URL}/bookmarks/${bookmark.id}/shares`, { headers: { Authorization: `Bearer ${token}` } });
+      setCurrentShares(res.data);
+      setQuery(''); setUsers([]);
     } catch (e) { alert("Failed to share"); }
+  };
+
+  const unshareWith = async (userId) => {
+    try {
+      await axios.post(`${API_URL}/bookmarks/${bookmark.id}/unshare`, { receiverId: userId }, { headers: { Authorization: `Bearer ${token}` } });
+      setCurrentShares(currentShares.filter(u => u.id !== userId));
+    } catch (e) { alert("Failed to remove"); }
   };
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 backdrop-blur-sm p-4 animate-in fade-in" onClick={onClose}>
       <div className="glass-panel w-full max-w-md p-6 rounded-2xl" onClick={e => e.stopPropagation()}>
-        <h3 className="text-xl font-bold text-white mb-4">Share Bookmark</h3>
-        <div className="relative mb-4">
+        <div className="flex justify-between items-center mb-4">
+          <h3 className="text-xl font-bold text-white">Share Bookmark</h3>
+          <button onClick={onClose}><X size={20} className="text-slate-400 hover:text-white" /></button>
+        </div>
+        
+        <p className="text-sm text-slate-400 mb-4 line-clamp-1 border-b border-white/10 pb-4">{bookmark.title}</p>
+
+        {/* Current Shares */}
+        {currentShares.length > 0 && (
+          <div className="mb-6">
+            <h4 className="text-xs font-bold text-slate-500 uppercase tracking-wider mb-2">Currently Shared With</h4>
+            <div className="space-y-2">
+              {currentShares.map(u => (
+                <div key={u.id} className="flex justify-between items-center p-2 bg-white/5 rounded-lg border border-white/5">
+                  <span className="text-indigo-300 font-medium text-sm">@{u.username}</span>
+                  <button onClick={() => unshareWith(u.id)} className="p-1.5 bg-red-500/10 hover:bg-red-500 rounded text-red-400 hover:text-white transition">
+                    <UserMinus size={14} />
+                  </button>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+        
+        {/* Add New */}
+        <h4 className="text-xs font-bold text-slate-500 uppercase tracking-wider mb-2">Add Person</h4>
+        <div className="relative mb-2">
           <Search className="absolute left-3 top-3 text-slate-500" size={18} />
           <input type="text" placeholder="Search username..." className="w-full pl-10 p-3 rounded-xl bg-slate-900/50 border border-white/10 text-white focus:outline-none focus:border-indigo-500" autoFocus value={query} onChange={e => setQuery(e.target.value)} />
         </div>
-        <div className="space-y-2 max-h-60 overflow-y-auto">
+        <div className="space-y-2 max-h-40 overflow-y-auto">
           {loading && <div className="text-center text-slate-500 py-2">Searching...</div>}
           {users.map(u => (
-            <div key={u.id} className="flex justify-between items-center p-3 hover:bg-white/5 rounded-lg transition">
+            <div key={u.id} className="flex justify-between items-center p-3 hover:bg-white/5 rounded-lg transition cursor-pointer" onClick={() => shareWith(u.id)}>
               <span className="text-white font-medium">@{u.username}</span>
-              <button onClick={() => shareWith(u.id)} className="px-3 py-1 bg-indigo-600 hover:bg-indigo-500 rounded-lg text-xs font-bold text-white">Send</button>
+              <span className="text-xs text-indigo-400 font-bold">Add +</span>
             </div>
           ))}
         </div>

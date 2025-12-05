@@ -9,27 +9,19 @@ const { authenticateToken, register, login } = require('./auth');
 const app = express();
 const PORT = process.env.PORT || 3000;
 
-// Middleware
 app.use(cors());
 app.use(express.json());
 app.use('/screenshots', express.static(path.join(__dirname, '../public/screenshots')));
 
-// Initialize System
-// We wrap this in an async function to catch errors
 (async () => {
-    try {
-        await initDB();
-        startCronJobs();
-    } catch (err) {
-        console.error("Critical Startup Error:", err);
-    }
+    try { await initDB(); startCronJobs(); } 
+    catch (err) { console.error("Critical Startup Error:", err); }
 })();
 
-// --- AUTH ROUTES ---
+// --- AUTH ---
 app.post('/api/auth/register', register);
 app.post('/api/auth/login', login);
 
-// --- SEARCH USERS ---
 app.get('/api/users/search', authenticateToken, async (req, res) => {
     const { q } = req.query;
     try {
@@ -43,11 +35,9 @@ app.get('/api/users/search', authenticateToken, async (req, res) => {
 
 // --- BOOKMARKS ---
 
-// 1. Add Bookmark
 app.post('/api/bookmarks', authenticateToken, async (req, res) => {
     const { url } = req.body;
     console.log(`📝 [API] Request to add: ${url}`);
-    
     try {
         const screenshotDir = path.join(__dirname, '../public/screenshots');
         const data = await scrapeBookmark(url, screenshotDir);
@@ -69,9 +59,9 @@ app.post('/api/bookmarks', authenticateToken, async (req, res) => {
     }
 });
 
-// 2. Get All Bookmarks
 app.get('/api/bookmarks', authenticateToken, async (req, res) => {
     try {
+        // FIX: Sort by created_at so items don't jump around on refresh
         const result = await pool.query(`
             SELECT b.*, 
                    u.username as owner_name,
@@ -83,13 +73,26 @@ app.get('/api/bookmarks', authenticateToken, async (req, res) => {
             LEFT JOIN users u ON b.user_id = u.id
             LEFT JOIN shared_bookmarks sb ON b.id = sb.bookmark_id
             WHERE b.user_id = $1 OR sb.receiver_id = $1
-            ORDER BY b.last_checked DESC
+            ORDER BY b.created_at DESC
         `, [req.user.id]);
         res.json(result.rows);
     } catch (err) { res.status(500).json({ error: 'Failed' }); }
 });
 
-// 3. Share Bookmark
+// Get users this bookmark is shared with
+app.get('/api/bookmarks/:id/shares', authenticateToken, async (req, res) => {
+    try {
+        const result = await pool.query(`
+            SELECT u.id, u.username 
+            FROM shared_bookmarks sb
+            JOIN users u ON sb.receiver_id = u.id
+            WHERE sb.bookmark_id = $1 AND sb.sender_id = $2
+        `, [req.params.id, req.user.id]);
+        res.json(result.rows);
+    } catch (err) { res.status(500).json({ error: 'Failed to fetch shares' }); }
+});
+
+// Share
 app.post('/api/bookmarks/:id/share', authenticateToken, async (req, res) => {
     const { receiverId } = req.body;
     try {
@@ -104,7 +107,19 @@ app.post('/api/bookmarks/:id/share', authenticateToken, async (req, res) => {
     } catch (err) { res.status(500).json({ error: 'Share failed' }); }
 });
 
-// 4. Force Check (Refresh)
+// Unshare (Stop sharing with a user)
+app.post('/api/bookmarks/:id/unshare', authenticateToken, async (req, res) => {
+    const { receiverId } = req.body;
+    try {
+        await pool.query(
+            'DELETE FROM shared_bookmarks WHERE bookmark_id = $1 AND sender_id = $2 AND receiver_id = $3',
+            [req.params.id, req.user.id, receiverId]
+        );
+        res.json({ message: 'Unshared successfully' });
+    } catch (err) { res.status(500).json({ error: 'Unshare failed' }); }
+});
+
+// Check/Refresh
 app.post('/api/bookmarks/:id/check', authenticateToken, async (req, res) => {
     try {
         const bm = await pool.query('SELECT * FROM bookmarks WHERE id = $1', [req.params.id]);
@@ -130,21 +145,26 @@ app.post('/api/bookmarks/:id/check', authenticateToken, async (req, res) => {
                 WHERE id = $3
             `, [data.title, data.imagePath, req.params.id]);
         }
-
         res.json({ message: 'Updated', price: data.price });
     } catch (err) { res.status(500).json({ error: 'Failed' }); }
 });
 
-// 5. Delete Bookmark
+// Delete (Handles both Owner deleting item AND Receiver removing shared item)
 app.delete('/api/bookmarks/:id', authenticateToken, async (req, res) => {
     try {
+        // 1. Try to delete as Owner
         const result = await pool.query('DELETE FROM bookmarks WHERE id = $1 AND user_id = $2 RETURNING *', [req.params.id, req.user.id]);
-        if (result.rows.length === 0) return res.status(404).json({ error: 'Not found' });
+        
+        // 2. If not owner, try to remove from shared list (as Receiver)
+        if (result.rows.length === 0) {
+            const sharedResult = await pool.query('DELETE FROM shared_bookmarks WHERE bookmark_id = $1 AND receiver_id = $2 RETURNING *', [req.params.id, req.user.id]);
+            if (sharedResult.rows.length === 0) return res.status(404).json({ error: 'Not found or unauthorized' });
+        }
+        
         res.json({ message: 'Deleted' });
     } catch (err) { res.status(500).json({ error: 'Delete failed' }); }
 });
 
-// --- SERVE FRONTEND ---
 const distPath = path.join(__dirname, '../frontend/dist');
 app.use(express.static(distPath));
 app.get('*', (req, res) => res.sendFile(path.join(distPath, 'index.html')));
