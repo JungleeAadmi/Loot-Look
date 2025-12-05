@@ -9,109 +9,122 @@ const { authenticateToken, register, login } = require('./auth');
 const app = express();
 const PORT = process.env.PORT || 3000;
 
-// Middleware
 app.use(cors());
 app.use(express.json());
-// Serve screenshots statically
 app.use('/screenshots', express.static(path.join(__dirname, '../public/screenshots')));
 
-// Initialize System
 initDB();
 startCronJobs();
 
-// --- AUTH ROUTES ---
+// --- AUTH ---
 app.post('/api/auth/register', register);
 app.post('/api/auth/login', login);
 
-// --- APP ROUTES ---
+// --- SEARCH USERS (For Sharing) ---
+app.get('/api/users/search', authenticateToken, async (req, res) => {
+    const { q } = req.query;
+    try {
+        const result = await pool.query(
+            'SELECT id, username FROM users WHERE username ILIKE $1 AND id != $2 LIMIT 5', 
+            [`%${q}%`, req.user.id]
+        );
+        res.json(result.rows);
+    } catch (err) { res.status(500).json({ error: 'Search failed' }); }
+});
 
-// 1. Add New Bookmark (Protected)
+// --- BOOKMARKS ---
+
+// 1. Add
 app.post('/api/bookmarks', authenticateToken, async (req, res) => {
     const { url } = req.body;
-    const userId = req.user.id; 
-    
     try {
         const screenshotDir = path.join(__dirname, '../public/screenshots');
         const data = await scrapeBookmark(url, screenshotDir);
 
         const result = await pool.query(`
-            INSERT INTO bookmarks (user_id, url, title, image_url, is_tracked, current_price, currency)
-            VALUES ($1, $2, $3, $4, $5, $6, $7)
+            INSERT INTO bookmarks (user_id, url, title, image_url, site_name, is_tracked, current_price, currency)
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
             RETURNING *
-        `, [userId, url, data.title, data.imagePath, data.isTracked, data.price, data.currency]);
+        `, [req.user.id, url, data.title, data.imagePath, data.site_name, data.isTracked, data.price, data.currency]);
 
         if (data.isTracked) {
-            await pool.query(`INSERT INTO price_history (bookmark_id, price) VALUES ($1, $2)`, 
-            [result.rows[0].id, data.price]);
+            await pool.query(`INSERT INTO price_history (bookmark_id, price) VALUES ($1, $2)`, [result.rows[0].id, data.price]);
         }
-
         res.json(result.rows[0]);
-    } catch (err) {
-        console.error(err);
-        res.status(500).json({ error: 'Failed to add bookmark' });
-    }
+    } catch (err) { res.status(500).json({ error: 'Failed' }); }
 });
 
-// 2. Get All Bookmarks
+// 2. Get All (Own + Shared)
 app.get('/api/bookmarks', authenticateToken, async (req, res) => {
-    const userId = req.user.id;
     try {
-        const result = await pool.query('SELECT * FROM bookmarks WHERE user_id = $1 ORDER BY created_at DESC', [userId]);
+        const result = await pool.query(`
+            SELECT b.*, 
+                   u.username as owner_name,
+                   CASE WHEN b.user_id = $1 THEN NULL ELSE u.username END as shared_by,
+                   (SELECT u2.username FROM shared_bookmarks sb 
+                    JOIN users u2 ON sb.receiver_id = u2.id 
+                    WHERE sb.bookmark_id = b.id LIMIT 1) as shared_with
+            FROM bookmarks b
+            LEFT JOIN users u ON b.user_id = u.id
+            LEFT JOIN shared_bookmarks sb ON b.id = sb.bookmark_id
+            WHERE b.user_id = $1 OR sb.receiver_id = $1
+            ORDER BY b.last_checked DESC
+        `, [req.user.id]);
         res.json(result.rows);
-    } catch (err) {
-        res.status(500).json({ error: 'Failed to fetch bookmarks' });
-    }
+    } catch (err) { res.status(500).json({ error: 'Failed' }); }
 });
 
-// 3. Force Check
-app.post('/api/bookmarks/:id/check', authenticateToken, async (req, res) => {
-    const { id } = req.params;
-    const userId = req.user.id;
-
+// 3. Share Bookmark
+app.post('/api/bookmarks/:id/share', authenticateToken, async (req, res) => {
+    const { receiverId } = req.body;
     try {
-        const bm = await pool.query('SELECT * FROM bookmarks WHERE id = $1 AND user_id = $2', [id, userId]);
-        if (bm.rows.length === 0) return res.status(404).send('Not found or unauthorized');
+        // Verify ownership
+        const check = await pool.query('SELECT * FROM bookmarks WHERE id = $1 AND user_id = $2', [req.params.id, req.user.id]);
+        if (check.rows.length === 0) return res.status(403).json({ error: 'Unauthorized' });
 
+        await pool.query(
+            'INSERT INTO shared_bookmarks (bookmark_id, sender_id, receiver_id) VALUES ($1, $2, $3) ON CONFLICT DO NOTHING',
+            [req.params.id, req.user.id, receiverId]
+        );
+        res.json({ message: 'Shared successfully' });
+    } catch (err) { res.status(500).json({ error: 'Share failed' }); }
+});
+
+// 4. Force Check
+app.post('/api/bookmarks/:id/check', authenticateToken, async (req, res) => {
+    try {
+        const bm = await pool.query('SELECT * FROM bookmarks WHERE id = $1', [req.params.id]);
+        if (bm.rows.length === 0) return res.status(404).send('Not found');
+
+        const oldPrice = parseFloat(bm.rows[0].current_price || 0);
         const screenshotDir = path.join(__dirname, '../public/screenshots');
         const data = await scrapeBookmark(bm.rows[0].url, screenshotDir);
 
         if (data.price) {
-            await pool.query('UPDATE bookmarks SET current_price = $1, last_checked = NOW() WHERE id = $2', 
-                [data.price, id]);
-            await pool.query('INSERT INTO price_history (bookmark_id, price) VALUES ($1, $2)', 
-                [id, data.price]);
+            // Update logic: Set previous_price to oldPrice
+            await pool.query(`
+                UPDATE bookmarks 
+                SET current_price = $1, previous_price = $2, last_checked = NOW() 
+                WHERE id = $3
+            `, [data.price, oldPrice, req.params.id]);
+            
+            await pool.query('INSERT INTO price_history (bookmark_id, price) VALUES ($1, $2)', [req.params.id, data.price]);
         }
-
         res.json({ message: 'Updated', price: data.price });
-    } catch (err) {
-        res.status(500).json({ error: 'Update failed' });
-    }
+    } catch (err) { res.status(500).json({ error: 'Failed' }); }
 });
 
-// 4. Delete Bookmark (NEW)
+// 5. Delete
 app.delete('/api/bookmarks/:id', authenticateToken, async (req, res) => {
-    const { id } = req.params;
-    const userId = req.user.id;
-
     try {
-        const result = await pool.query('DELETE FROM bookmarks WHERE id = $1 AND user_id = $2 RETURNING *', [id, userId]);
-        if (result.rows.length === 0) return res.status(404).json({ error: 'Not found or unauthorized' });
-        
+        const result = await pool.query('DELETE FROM bookmarks WHERE id = $1 AND user_id = $2 RETURNING *', [req.params.id, req.user.id]);
+        if (result.rows.length === 0) return res.status(404).json({ error: 'Not found' });
         res.json({ message: 'Deleted' });
-    } catch (err) {
-        console.error(err);
-        res.status(500).json({ error: 'Delete failed' });
-    }
+    } catch (err) { res.status(500).json({ error: 'Delete failed' }); }
 });
 
-// --- SERVE FRONTEND ---
 const distPath = path.join(__dirname, '../frontend/dist');
 app.use(express.static(distPath));
+app.get('*', (req, res) => res.sendFile(path.join(distPath, 'index.html')));
 
-app.get('*', (req, res) => {
-    res.sendFile(path.join(distPath, 'index.html'));
-});
-
-app.listen(PORT, '0.0.0.0', () => {
-    console.log(`🚀 LootLook Server running on port ${PORT}`);
-});
+app.listen(PORT, '0.0.0.0', () => console.log(`🚀 LootLook running on ${PORT}`));
