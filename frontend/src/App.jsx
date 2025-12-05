@@ -1,14 +1,12 @@
 import React, { useState, useEffect } from 'react';
 import { 
   LogOut, ExternalLink, RefreshCw, ShoppingBag, Link as LinkIcon, Loader2,
-  Share2, Trash2, Eye, X, Plus, Search, Copy, Download, UserMinus
+  Share2, Trash2, Eye, X, Plus, Search, Copy, Download, UserMinus, LogOut as LeaveIcon
 } from 'lucide-react';
 import axios from 'axios';
 
 const API_URL = '/api';
 
-// Date Formatter: "Syncs from Device"
-// This automatically uses the timezone of the device viewing the page.
 const formatDate = (dateString) => {
   if (!dateString) return 'Never';
   return new Date(dateString).toLocaleString('en-IN', {
@@ -144,7 +142,6 @@ const Dashboard = ({ user, token, onLogout, openSnip }) => {
     if (!newUrl) return;
     setAdding(true);
     try {
-      // FIX: Send current Device Time to server
       const clientTime = new Date().toISOString();
       await axios.post(`${API_URL}/bookmarks`, { url: newUrl, clientTime }, { headers: { Authorization: `Bearer ${token}` } });
       setNewUrl('');
@@ -153,20 +150,16 @@ const Dashboard = ({ user, token, onLogout, openSnip }) => {
     finally { setAdding(false); }
   };
 
-  // CSV Export Logic
   const downloadCSV = () => {
     const headers = ["Title", "Price", "URL", "Added Date", "Last Checked"];
     const rows = bookmarks.map(b => [
-      `"${b.title.replace(/"/g, '""')}"`, // Escape quotes
+      `"${b.title.replace(/"/g, '""')}"`,
       b.current_price || 0,
       b.url,
       formatDate(b.created_at),
       formatDate(b.last_checked)
     ]);
-    
-    const csvContent = "data:text/csv;charset=utf-8," + 
-      [headers.join(","), ...rows.map(e => e.join(","))].join("\n");
-      
+    const csvContent = "data:text/csv;charset=utf-8," + [headers.join(","), ...rows.map(e => e.join(","))].join("\n");
     const encodedUri = encodeURI(csvContent);
     const link = document.createElement("a");
     link.setAttribute("href", encodedUri);
@@ -183,23 +176,15 @@ const Dashboard = ({ user, token, onLogout, openSnip }) => {
           <div className="bg-indigo-600/90 p-2.5 rounded-full"><ShoppingBag size={24} className="text-white" /></div>
           <div><h1 className="text-xl font-bold text-white">LootLook</h1><p className="text-xs text-indigo-300">@{user.username}</p></div>
         </div>
-        
         <form onSubmit={handleAdd} className="relative group w-full md:w-[500px]">
           <div className="absolute left-4 top-1/2 -translate-y-1/2 text-slate-400">{adding ? <Loader2 className="animate-spin" size={18} /> : <Plus size={18} />}</div>
           <input type="url" placeholder="Paste link to track..." className="w-full pl-12 pr-28 py-3 rounded-xl bg-slate-900/50 border border-white/10 text-white focus:outline-none focus:ring-2 focus:ring-indigo-500/50" value={newUrl} onChange={(e) => setNewUrl(e.target.value)} required disabled={adding} />
           <button type="submit" disabled={adding} className="absolute right-1.5 top-1.5 bottom-1.5 px-4 rounded-lg bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-bold shadow-md">Add</button>
         </form>
-        
         <div className="w-full md:w-auto flex justify-end gap-2">
-          <button onClick={downloadCSV} className="flex items-center gap-2 px-4 py-2 hover:bg-white/5 rounded-full text-slate-400 hover:text-white transition" title="Export CSV">
-            <Download size={18} />
-          </button>
-          <button onClick={() => fetchBookmarks(false)} className="flex items-center gap-2 px-4 py-2 hover:bg-white/5 rounded-full text-slate-400 hover:text-white transition" title="Sync Now">
-            <RefreshCw size={18} className={syncing ? 'animate-spin' : ''} />
-          </button>
-          <button onClick={onLogout} className="flex items-center gap-2 text-xs font-semibold text-slate-400 hover:text-white px-4 py-2 hover:bg-white/5 rounded-full border border-white/5">
-            <LogOut size={16} /> Log Out
-          </button>
+          <button onClick={downloadCSV} className="flex items-center gap-2 px-4 py-2 hover:bg-white/5 rounded-full text-slate-400 hover:text-white transition" title="Export CSV"><Download size={18} /></button>
+          <button onClick={() => fetchBookmarks(false)} className="flex items-center gap-2 px-4 py-2 hover:bg-white/5 rounded-full text-slate-400 hover:text-white transition" title="Sync Now"><RefreshCw size={18} className={syncing ? 'animate-spin' : ''} /></button>
+          <button onClick={onLogout} className="flex items-center gap-2 text-xs font-semibold text-slate-400 hover:text-white px-4 py-2 hover:bg-white/5 rounded-full border border-white/5"><LogOut size={16} /> Log Out</button>
         </div>
       </nav>
 
@@ -220,7 +205,7 @@ const Dashboard = ({ user, token, onLogout, openSnip }) => {
         </div>
       )}
 
-      {shareModalData && <ShareModal bookmark={shareModalData} token={token} onClose={() => setShareModalData(null)} />}
+      {shareModalData && <ShareModal bookmark={shareModalData} token={token} onClose={() => setShareModalData(null)} refreshData={() => fetchBookmarks(true)} />}
     </div>
   );
 };
@@ -280,8 +265,17 @@ const BookmarkCard = ({ data, token, refreshData, onSnip, onShare }) => {
         <div className="absolute top-3 left-3 right-3 flex justify-between">
           <div className="flex gap-1 flex-wrap">
             {data.is_tracked && <span className="bg-emerald-500/90 text-white text-[10px] font-bold px-2 py-1 rounded shadow">TRACKING</span>}
-            {data.shared_by && <span className="bg-purple-500/90 text-white text-[10px] font-bold px-2 py-1 rounded shadow">FROM @{data.shared_by}</span>}
-            {data.shared_with && <span className="bg-blue-500/90 text-white text-[10px] font-bold px-2 py-1 rounded shadow">TO @{data.shared_with}</span>}
+            {/* Clickable Tags for Sharing Management */}
+            {data.shared_by && (
+              <button onClick={(e) => {e.stopPropagation(); onShare();}} className="bg-purple-500/90 hover:bg-purple-600 text-white text-[10px] font-bold px-2 py-1 rounded shadow transition">
+                FROM @{data.shared_by}
+              </button>
+            )}
+            {data.shared_with && (
+              <button onClick={(e) => {e.stopPropagation(); onShare();}} className="bg-blue-500/90 hover:bg-blue-600 text-white text-[10px] font-bold px-2 py-1 rounded shadow transition">
+                TO @{data.shared_with}
+              </button>
+            )}
           </div>
         </div>
       </div>
@@ -303,34 +297,34 @@ const BookmarkCard = ({ data, token, refreshData, onSnip, onShare }) => {
           <div className="flex justify-between"><span>Added:</span> <span className="font-mono text-slate-400">{formatDate(data.created_at)}</span></div>
         </div>
         <div className="grid grid-cols-4 gap-2">
-          <button onClick={(e) => {e.stopPropagation(); handleCheck()}} className="btn-icon p-2 rounded-lg flex justify-center col-span-1" title="Refresh Price">
-            <RefreshCw size={16} className={checking ? 'animate-spin text-indigo-400' : ''} />
-          </button>
+          <button onClick={(e) => {e.stopPropagation(); handleCheck()}} className="btn-icon p-2 rounded-lg flex justify-center col-span-1" title="Refresh Price"><RefreshCw size={16} className={checking ? 'animate-spin text-indigo-400' : ''} /></button>
           <button onClick={onSnip} className="btn-icon p-2 rounded-lg flex justify-center col-span-1" title="View Screenshot"><Eye size={16} /></button>
           <button onClick={onShare} className="btn-icon p-2 rounded-lg flex justify-center col-span-1" title="Share Settings"><Share2 size={16} /></button>
           <button onClick={handleCopy} className="btn-icon p-2 rounded-lg flex justify-center col-span-1" title="Copy Link"><Copy size={16} /></button>
-          <a href={data.url} target="_blank" rel="noreferrer" className="btn-icon p-2 rounded-lg flex justify-center items-center col-span-3 bg-indigo-600/10 hover:bg-indigo-600/20 text-indigo-400 hover:text-indigo-300" title="Open Website">
-            <span className="text-xs font-bold mr-2">OPEN LINK</span> <ExternalLink size={14} />
-          </a>
-          <button onClick={(e) => {e.stopPropagation(); handleDelete()}} className="p-2 rounded-lg bg-red-500/10 hover:bg-red-600 text-red-500 hover:text-white transition flex justify-center col-span-1" title="Delete">
-            <Trash2 size={16} />
-          </button>
+          <a href={data.url} target="_blank" rel="noreferrer" className="btn-icon p-2 rounded-lg flex justify-center items-center col-span-3 bg-indigo-600/10 hover:bg-indigo-600/20 text-indigo-400 hover:text-indigo-300" title="Open Website"><span className="text-xs font-bold mr-2">OPEN LINK</span> <ExternalLink size={14} /></a>
+          <button onClick={(e) => {e.stopPropagation(); handleDelete()}} className="p-2 rounded-lg bg-red-500/10 hover:bg-red-600 text-red-500 hover:text-white transition flex justify-center col-span-1" title="Delete"><Trash2 size={16} /></button>
         </div>
       </div>
     </div>
   );
 };
 
-const ShareModal = ({ bookmark, token, onClose }) => {
+const ShareModal = ({ bookmark, token, onClose, refreshData }) => {
   const [query, setQuery] = useState('');
   const [users, setUsers] = useState([]);
   const [currentShares, setCurrentShares] = useState([]);
   const [loading, setLoading] = useState(false);
 
+  // If I am receiver, shared_by is set.
+  const isReceiver = !!bookmark.shared_by;
+
   useEffect(() => {
-    axios.get(`${API_URL}/bookmarks/${bookmark.id}/shares`, { headers: { Authorization: `Bearer ${token}` } })
-      .then(res => setCurrentShares(res.data))
-      .catch(() => {});
+    // Only fetch shares list if I am the owner
+    if (!isReceiver) {
+      axios.get(`${API_URL}/bookmarks/${bookmark.id}/shares`, { headers: { Authorization: `Bearer ${token}` } })
+        .then(res => setCurrentShares(res.data))
+        .catch(() => {});
+    }
   }, []);
 
   useEffect(() => {
@@ -361,43 +355,63 @@ const ShareModal = ({ bookmark, token, onClose }) => {
     } catch (e) { alert("Failed to remove"); }
   };
 
+  const leaveShare = async () => {
+    if (!confirm(`Stop receiving "${bookmark.title}" from @${bookmark.shared_by}?`)) return;
+    try {
+      await axios.delete(`${API_URL}/bookmarks/${bookmark.id}`, { headers: { Authorization: `Bearer ${token}` } });
+      refreshData();
+      onClose();
+    } catch (err) { alert("Failed to leave share"); }
+  };
+
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 backdrop-blur-sm p-4 animate-in fade-in" onClick={onClose}>
       <div className="glass-panel w-full max-w-md p-6 rounded-2xl" onClick={e => e.stopPropagation()}>
         <div className="flex justify-between items-center mb-4">
-          <h3 className="text-xl font-bold text-white">Share Bookmark</h3>
+          <h3 className="text-xl font-bold text-white">Share Settings</h3>
           <button onClick={onClose}><X size={20} className="text-slate-400 hover:text-white" /></button>
         </div>
         <p className="text-sm text-slate-400 mb-4 line-clamp-1 border-b border-white/10 pb-4">{bookmark.title}</p>
         
-        {currentShares.length > 0 && (
-          <div className="mb-6">
-            <h4 className="text-xs font-bold text-slate-500 uppercase tracking-wider mb-2">Currently Shared With</h4>
-            <div className="space-y-2">
-              {currentShares.map(u => (
-                <div key={u.id} className="flex justify-between items-center p-2 bg-white/5 rounded-lg border border-white/5">
-                  <span className="text-indigo-300 font-medium text-sm">@{u.username}</span>
-                  <button onClick={() => unshareWith(u.id)} className="p-1.5 bg-red-500/10 hover:bg-red-500 rounded text-red-400 hover:text-white transition"><UserMinus size={14} /></button>
+        {isReceiver ? (
+          <div className="text-center py-4">
+            <p className="text-slate-300 mb-4">Shared by <span className="text-purple-400 font-bold">@{bookmark.shared_by}</span></p>
+            <button onClick={leaveShare} className="w-full py-3 bg-red-600 hover:bg-red-500 rounded-xl text-white font-bold flex items-center justify-center gap-2">
+              <LeaveIcon size={18} /> Stop Receiving
+            </button>
+          </div>
+        ) : (
+          <>
+            {currentShares.length > 0 && (
+              <div className="mb-6">
+                <h4 className="text-xs font-bold text-slate-500 uppercase tracking-wider mb-2">Shared With</h4>
+                <div className="space-y-2">
+                  {currentShares.map(u => (
+                    <div key={u.id} className="flex justify-between items-center p-2 bg-white/5 rounded-lg border border-white/5">
+                      <span className="text-indigo-300 font-medium text-sm">@{u.username}</span>
+                      <button onClick={() => unshareWith(u.id)} className="p-1.5 bg-red-500/10 hover:bg-red-500 rounded text-red-400 hover:text-white transition"><UserMinus size={14} /></button>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+            
+            <h4 className="text-xs font-bold text-slate-500 uppercase tracking-wider mb-2">Add Person</h4>
+            <div className="relative mb-2">
+              <Search className="absolute left-3 top-3 text-slate-500" size={18} />
+              <input type="text" placeholder="Search username..." className="w-full pl-10 p-3 rounded-xl bg-slate-900/50 border border-white/10 text-white focus:outline-none focus:border-indigo-500" autoFocus value={query} onChange={e => setQuery(e.target.value)} />
+            </div>
+            <div className="space-y-2 max-h-40 overflow-y-auto">
+              {loading && <div className="text-center text-slate-500 py-2">Searching...</div>}
+              {users.map(u => (
+                <div key={u.id} className="flex justify-between items-center p-3 hover:bg-white/5 rounded-lg transition cursor-pointer" onClick={() => shareWith(u.id)}>
+                  <span className="text-white font-medium">@{u.username}</span>
+                  <span className="text-xs text-indigo-400 font-bold">Add +</span>
                 </div>
               ))}
             </div>
-          </div>
+          </>
         )}
-        
-        <h4 className="text-xs font-bold text-slate-500 uppercase tracking-wider mb-2">Add Person</h4>
-        <div className="relative mb-2">
-          <Search className="absolute left-3 top-3 text-slate-500" size={18} />
-          <input type="text" placeholder="Search username..." className="w-full pl-10 p-3 rounded-xl bg-slate-900/50 border border-white/10 text-white focus:outline-none focus:border-indigo-500" autoFocus value={query} onChange={e => setQuery(e.target.value)} />
-        </div>
-        <div className="space-y-2 max-h-40 overflow-y-auto">
-          {loading && <div className="text-center text-slate-500 py-2">Searching...</div>}
-          {users.map(u => (
-            <div key={u.id} className="flex justify-between items-center p-3 hover:bg-white/5 rounded-lg transition cursor-pointer" onClick={() => shareWith(u.id)}>
-              <span className="text-white font-medium">@{u.username}</span>
-              <span className="text-xs text-indigo-400 font-bold">Add +</span>
-            </div>
-          ))}
-        </div>
       </div>
     </div>
   );

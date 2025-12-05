@@ -36,14 +36,13 @@ app.get('/api/users/search', authenticateToken, async (req, res) => {
 // --- BOOKMARKS ---
 
 app.post('/api/bookmarks', authenticateToken, async (req, res) => {
-    const { url, clientTime } = req.body; // Accept clientTime
+    const { url, clientTime } = req.body;
     console.log(`📝 [API] Request to add: ${url}`);
     try {
         const screenshotDir = path.join(__dirname, '../public/screenshots');
         const data = await scrapeBookmark(url, screenshotDir);
         console.log(`   -> Scrape result: ${data.title}`);
 
-        // Use clientTime if provided, else current server time
         const timestamp = clientTime || new Date().toISOString();
 
         const result = await pool.query(`
@@ -64,13 +63,16 @@ app.post('/api/bookmarks', authenticateToken, async (req, res) => {
 
 app.get('/api/bookmarks', authenticateToken, async (req, res) => {
     try {
+        // FIX: logic for shared_with to only show for the owner
         const result = await pool.query(`
             SELECT b.*, 
                    u.username as owner_name,
                    CASE WHEN b.user_id = $1 THEN NULL ELSE u.username END as shared_by,
-                   (SELECT u2.username FROM shared_bookmarks sb 
-                    JOIN users u2 ON sb.receiver_id = u2.id 
-                    WHERE sb.bookmark_id = b.id LIMIT 1) as shared_with
+                   CASE WHEN b.user_id = $1 THEN 
+                       (SELECT u2.username FROM shared_bookmarks sb 
+                        JOIN users u2 ON sb.receiver_id = u2.id 
+                        WHERE sb.bookmark_id = b.id LIMIT 1)
+                   ELSE NULL END as shared_with
             FROM bookmarks b
             LEFT JOIN users u ON b.user_id = u.id
             LEFT JOIN shared_bookmarks sb ON b.id = sb.bookmark_id
@@ -81,7 +83,6 @@ app.get('/api/bookmarks', authenticateToken, async (req, res) => {
     } catch (err) { res.status(500).json({ error: 'Failed' }); }
 });
 
-// Get users this bookmark is shared with
 app.get('/api/bookmarks/:id/shares', authenticateToken, async (req, res) => {
     try {
         const result = await pool.query(`
@@ -94,7 +95,6 @@ app.get('/api/bookmarks/:id/shares', authenticateToken, async (req, res) => {
     } catch (err) { res.status(500).json({ error: 'Failed to fetch shares' }); }
 });
 
-// Share
 app.post('/api/bookmarks/:id/share', authenticateToken, async (req, res) => {
     const { receiverId } = req.body;
     try {
@@ -109,7 +109,6 @@ app.post('/api/bookmarks/:id/share', authenticateToken, async (req, res) => {
     } catch (err) { res.status(500).json({ error: 'Share failed' }); }
 });
 
-// Unshare
 app.post('/api/bookmarks/:id/unshare', authenticateToken, async (req, res) => {
     const { receiverId } = req.body;
     try {
@@ -121,7 +120,6 @@ app.post('/api/bookmarks/:id/unshare', authenticateToken, async (req, res) => {
     } catch (err) { res.status(500).json({ error: 'Unshare failed' }); }
 });
 
-// Check/Refresh
 app.post('/api/bookmarks/:id/check', authenticateToken, async (req, res) => {
     try {
         const bm = await pool.query('SELECT * FROM bookmarks WHERE id = $1', [req.params.id]);
@@ -151,7 +149,7 @@ app.post('/api/bookmarks/:id/check', authenticateToken, async (req, res) => {
     } catch (err) { res.status(500).json({ error: 'Failed' }); }
 });
 
-// Delete
+// Delete (Also handles "Leaving" a shared bookmark for the receiver)
 app.delete('/api/bookmarks/:id', authenticateToken, async (req, res) => {
     try {
         const result = await pool.query('DELETE FROM bookmarks WHERE id = $1 AND user_id = $2 RETURNING *', [req.params.id, req.user.id]);
