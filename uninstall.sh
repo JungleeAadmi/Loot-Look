@@ -32,7 +32,8 @@ fi
 
 # 3. Backup Prompt
 echo -e "\n${YELLOW}Do you want to BACKUP your data (Database + Screenshots) before uninstalling? (y/n)${NC}"
-read -r DO_BACKUP
+# FIX: Read from /dev/tty to support 'curl | bash' usage
+read -r DO_BACKUP < /dev/tty
 
 if [[ "$DO_BACKUP" =~ ^[Yy]$ ]]; then
     echo -e "${GREEN}Creating backup...${NC}"
@@ -58,7 +59,8 @@ fi
 
 # 4. Confirmation
 echo -e "\n${RED}Are you sure you want to completely uninstall LootLook App? (y/n)${NC}"
-read -r CONFIRM
+read -r CONFIRM < /dev/tty
+
 if [[ ! "$CONFIRM" =~ ^[Yy]$ ]]; then
     echo "Uninstall cancelled."
     exit 0
@@ -76,7 +78,7 @@ rm -rf $APP_DIR
 
 # 6. Database Cleanup Prompt
 echo -e "\n${RED}Do you also want to DELETE the database and user 'lootlook'? (y/n)${NC}"
-read -r DELETE_DB
+read -r DELETE_DB < /dev/tty
 
 if [[ "$DELETE_DB" =~ ^[Yy]$ ]]; then
     echo -e "${YELLOW}Dropping database and user...${NC}"
