@@ -1,6 +1,6 @@
 #!/bin/bash
 
-# LootLook Installer v3.1 (Safe Hex Fix)
+# LootLook Installer v3.2 (Bleeding Edge Fix)
 # Repo: https://github.com/JungleeAadmi/Loot-Look
 
 set -e
@@ -9,7 +9,7 @@ GREEN='\033[0;32m'
 YELLOW='\033[1;33m'
 NC='\033[0m'
 
-echo -e "${GREEN}--- STARTING LOOTLOOK INSTALLER v3.1 ---${NC}"
+echo -e "${GREEN}--- STARTING LOOTLOOK INSTALLER v3.2 ---${NC}"
 
 # 1. Root Check
 if [[ $EUID -ne 0 ]]; then
@@ -74,20 +74,17 @@ if ! sudo -u postgres psql -tAc "SELECT 1 FROM pg_roles WHERE rolname='$DB_USER'
     echo -e "${YELLOW}Set a DB password (leave empty to auto-generate):${NC}"
     read -sp "Enter Password: " DB_PASS
     echo
-    # FIX: Use hex to avoid special chars breaking the URL
     if [ -z "$DB_PASS" ]; then DB_PASS=$(openssl rand -hex 16); fi
-    
     sudo -u postgres psql -c "CREATE USER $DB_USER WITH PASSWORD '$DB_PASS';"
     sudo -u postgres psql -c "CREATE DATABASE $DB_NAME OWNER $DB_USER;"
     generate_env "$DB_PASS"
 else
     echo -e "${GREEN}Database user already exists.${NC}"
     if [ ! -f "$APP_DIR/backend/.env" ]; then
-        # FIX: Use hex here too for self-healing
         DB_PASS=$(openssl rand -hex 16)
         sudo -u postgres psql -c "ALTER USER $DB_USER WITH PASSWORD '$DB_PASS';"
         generate_env "$DB_PASS"
-        echo -e "${GREEN}Recovered missing config with safe password.${NC}"
+        echo -e "${GREEN}Recovered missing config.${NC}"
     fi
 fi
 
@@ -97,10 +94,16 @@ cd $APP_DIR/backend
 npm install
 
 # 8. MANUAL BROWSER DEPENDENCY INSTALL
-echo -e "${YELLOW}Manually installing browser dependencies...${NC}"
+echo -e "${YELLOW}Manually installing browser dependencies (Ubuntu 24.04/25.04)...${NC}"
+
+# We attempt to install t64 versions specifically for newer Ubuntu, 
+# falling back to standard names if needed.
 apt-get install -y libnss3 libnspr4 libatk1.0-0 libatk-bridge2.0-0 libcups2 libdrm2 \
-    libxkbcommon0 libxcomposite1 libxdamage1 libxfixes3 librandr2 libgbm1 libasound2 \
-    libpango-1.0-0 libcairo2
+    libxkbcommon0 libxcomposite1 libxdamage1 libxfixes3 libxrandr2 libgbm1 \
+    libpango-1.0-0 libcairo2 libasound2t64 || \
+    apt-get install -y libnss3 libnspr4 libatk1.0-0 libatk-bridge2.0-0 libcups2 libdrm2 \
+    libxkbcommon0 libxcomposite1 libxdamage1 libxfixes3 libxrandr2 libgbm1 \
+    libpango-1.0-0 libcairo2 libasound2
 
 # Fix libicu issue for bleeding edge Ubuntu
 if ! dpkg -l | grep -q libicu74; then

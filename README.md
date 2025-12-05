@@ -4,13 +4,19 @@ LootLook is a self-hosted "Smart Bookmark" manager. While it functions as a beau
 
 🚀 Usage
 
-Install: 
+**Install:** 
 
 ```
 curl -sSL https://raw.githubusercontent.com/JungleeAadmi/Loot-Look/main/install.sh | bash
 
 ```
+**Update**
 
-Run Backend: cd backend && npm start
+```
+curl -sSL https://raw.githubusercontent.com/JungleeAadmi/Loot-Look/main/update.sh | bash
 
-Run Frontend: cd frontend && npm run dev
+```
+**Uninstall**
+```
+curl -sSL https://raw.githubusercontent.com/JungleeAadmi/Loot-Look/main/uninstall.sh | bash
+```
