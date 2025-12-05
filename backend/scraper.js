@@ -30,7 +30,7 @@ async function scrapeBookmark(url, screenshotDir) {
             args: [
                 '--no-sandbox', 
                 '--disable-setuid-sandbox',
-                '--disable-dev-shm-usage', // <--- CRITICAL FIX FOR LXC CRASHES
+                '--disable-dev-shm-usage', // <--- CRITICAL FIX FOR LXC MEMORY CRASHES
                 '--disable-gpu'
             ]
         });

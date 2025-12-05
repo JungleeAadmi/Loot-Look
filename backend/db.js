@@ -11,6 +11,7 @@ const initDB = async () => {
     try {
         console.log('📦 Initializing Database...');
         
+        // 1. Users Table
         await client.query(`
             CREATE TABLE IF NOT EXISTS users (
                 id SERIAL PRIMARY KEY,
@@ -20,6 +21,7 @@ const initDB = async () => {
             );
         `);
 
+        // 2. Bookmarks Table
         await client.query(`
             CREATE TABLE IF NOT EXISTS bookmarks (
                 id SERIAL PRIMARY KEY,
@@ -31,12 +33,19 @@ const initDB = async () => {
                 is_tracked BOOLEAN DEFAULT FALSE,
                 currency VARCHAR(10) DEFAULT 'INR',
                 current_price NUMERIC(12, 2),
-                previous_price NUMERIC(12, 2), -- Added for trends
+                previous_price NUMERIC(12, 2),
                 last_checked TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             );
         `);
 
+        // --- AUTO-MIGRATION (Fixes "Column does not exist" error) ---
+        // This ensures old databases get the new columns without needing a reinstall
+        await client.query(`ALTER TABLE bookmarks ADD COLUMN IF NOT EXISTS site_name TEXT;`);
+        await client.query(`ALTER TABLE bookmarks ADD COLUMN IF NOT EXISTS previous_price NUMERIC(12, 2);`);
+        // ------------------------------------------------------------
+
+        // 3. Price History
         await client.query(`
             CREATE TABLE IF NOT EXISTS price_history (
                 id SERIAL PRIMARY KEY,
@@ -46,7 +55,7 @@ const initDB = async () => {
             );
         `);
 
-        // New Table: Shared Bookmarks
+        // 4. Shared Bookmarks (New feature)
         await client.query(`
             CREATE TABLE IF NOT EXISTS shared_bookmarks (
                 id SERIAL PRIMARY KEY,
