@@ -52,7 +52,7 @@ app.post('/api/bookmarks', authenticateToken, async (req, res) => {
     }
 });
 
-// 2. Get All Bookmarks (Protected & User Specific)
+// 2. Get All Bookmarks
 app.get('/api/bookmarks', authenticateToken, async (req, res) => {
     const userId = req.user.id;
     try {
@@ -63,7 +63,7 @@ app.get('/api/bookmarks', authenticateToken, async (req, res) => {
     }
 });
 
-// 3. Force Check (Protected)
+// 3. Force Check
 app.post('/api/bookmarks/:id/check', authenticateToken, async (req, res) => {
     const { id } = req.params;
     const userId = req.user.id;
@@ -88,12 +88,26 @@ app.post('/api/bookmarks/:id/check', authenticateToken, async (req, res) => {
     }
 });
 
-// --- SERVE FRONTEND (ALWAYS) ---
-// We removed the "if production" check so it works even in manual dev mode
+// 4. Delete Bookmark (NEW)
+app.delete('/api/bookmarks/:id', authenticateToken, async (req, res) => {
+    const { id } = req.params;
+    const userId = req.user.id;
+
+    try {
+        const result = await pool.query('DELETE FROM bookmarks WHERE id = $1 AND user_id = $2 RETURNING *', [id, userId]);
+        if (result.rows.length === 0) return res.status(404).json({ error: 'Not found or unauthorized' });
+        
+        res.json({ message: 'Deleted' });
+    } catch (err) {
+        console.error(err);
+        res.status(500).json({ error: 'Delete failed' });
+    }
+});
+
+// --- SERVE FRONTEND ---
 const distPath = path.join(__dirname, '../frontend/dist');
 app.use(express.static(distPath));
 
-// Handle React Routing (Catch-all)
 app.get('*', (req, res) => {
     res.sendFile(path.join(distPath, 'index.html'));
 });
