@@ -36,18 +36,21 @@ app.get('/api/users/search', authenticateToken, async (req, res) => {
 // --- BOOKMARKS ---
 
 app.post('/api/bookmarks', authenticateToken, async (req, res) => {
-    const { url } = req.body;
+    const { url, clientTime } = req.body; // Accept clientTime
     console.log(`📝 [API] Request to add: ${url}`);
     try {
         const screenshotDir = path.join(__dirname, '../public/screenshots');
         const data = await scrapeBookmark(url, screenshotDir);
         console.log(`   -> Scrape result: ${data.title}`);
 
+        // Use clientTime if provided, else current server time
+        const timestamp = clientTime || new Date().toISOString();
+
         const result = await pool.query(`
-            INSERT INTO bookmarks (user_id, url, title, image_url, site_name, is_tracked, current_price, currency)
-            VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+            INSERT INTO bookmarks (user_id, url, title, image_url, site_name, is_tracked, current_price, currency, created_at)
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
             RETURNING *
-        `, [req.user.id, url, data.title, data.imagePath, data.site_name, data.isTracked, data.price, data.currency]);
+        `, [req.user.id, url, data.title, data.imagePath, data.site_name, data.isTracked, data.price, data.currency, timestamp]);
 
         if (data.isTracked) {
             await pool.query(`INSERT INTO price_history (bookmark_id, price) VALUES ($1, $2)`, [result.rows[0].id, data.price]);
@@ -61,7 +64,6 @@ app.post('/api/bookmarks', authenticateToken, async (req, res) => {
 
 app.get('/api/bookmarks', authenticateToken, async (req, res) => {
     try {
-        // FIX: Sort by created_at so items don't jump around on refresh
         const result = await pool.query(`
             SELECT b.*, 
                    u.username as owner_name,
@@ -107,7 +109,7 @@ app.post('/api/bookmarks/:id/share', authenticateToken, async (req, res) => {
     } catch (err) { res.status(500).json({ error: 'Share failed' }); }
 });
 
-// Unshare (Stop sharing with a user)
+// Unshare
 app.post('/api/bookmarks/:id/unshare', authenticateToken, async (req, res) => {
     const { receiverId } = req.body;
     try {
@@ -149,18 +151,14 @@ app.post('/api/bookmarks/:id/check', authenticateToken, async (req, res) => {
     } catch (err) { res.status(500).json({ error: 'Failed' }); }
 });
 
-// Delete (Handles both Owner deleting item AND Receiver removing shared item)
+// Delete
 app.delete('/api/bookmarks/:id', authenticateToken, async (req, res) => {
     try {
-        // 1. Try to delete as Owner
         const result = await pool.query('DELETE FROM bookmarks WHERE id = $1 AND user_id = $2 RETURNING *', [req.params.id, req.user.id]);
-        
-        // 2. If not owner, try to remove from shared list (as Receiver)
         if (result.rows.length === 0) {
             const sharedResult = await pool.query('DELETE FROM shared_bookmarks WHERE bookmark_id = $1 AND receiver_id = $2 RETURNING *', [req.params.id, req.user.id]);
             if (sharedResult.rows.length === 0) return res.status(404).json({ error: 'Not found or unauthorized' });
         }
-        
         res.json({ message: 'Deleted' });
     } catch (err) { res.status(500).json({ error: 'Delete failed' }); }
 });

@@ -7,12 +7,11 @@ import axios from 'axios';
 
 const API_URL = '/api';
 
-// Date Formatter: Strict IST
+// Date Formatter: "Syncs from Device"
+// This automatically uses the timezone of the device viewing the page.
 const formatDate = (dateString) => {
   if (!dateString) return 'Never';
-  const d = new Date(dateString);
-  return d.toLocaleString('en-IN', {
-    timeZone: 'Asia/Kolkata',
+  return new Date(dateString).toLocaleString('en-IN', {
     day: '2-digit', month: 'short', year: '2-digit',
     hour: '2-digit', minute: '2-digit', hour12: true
   });
@@ -145,7 +144,9 @@ const Dashboard = ({ user, token, onLogout, openSnip }) => {
     if (!newUrl) return;
     setAdding(true);
     try {
-      await axios.post(`${API_URL}/bookmarks`, { url: newUrl }, { headers: { Authorization: `Bearer ${token}` } });
+      // FIX: Send current Device Time to server
+      const clientTime = new Date().toISOString();
+      await axios.post(`${API_URL}/bookmarks`, { url: newUrl, clientTime }, { headers: { Authorization: `Bearer ${token}` } });
       setNewUrl('');
       fetchBookmarks();
     } catch (err) { alert('Failed to add link. Please try again.'); } 
@@ -190,16 +191,12 @@ const Dashboard = ({ user, token, onLogout, openSnip }) => {
         </form>
         
         <div className="w-full md:w-auto flex justify-end gap-2">
-          {/* Export CSV */}
           <button onClick={downloadCSV} className="flex items-center gap-2 px-4 py-2 hover:bg-white/5 rounded-full text-slate-400 hover:text-white transition" title="Export CSV">
             <Download size={18} />
           </button>
-
-          {/* Sync */}
           <button onClick={() => fetchBookmarks(false)} className="flex items-center gap-2 px-4 py-2 hover:bg-white/5 rounded-full text-slate-400 hover:text-white transition" title="Sync Now">
             <RefreshCw size={18} className={syncing ? 'animate-spin' : ''} />
           </button>
-          
           <button onClick={onLogout} className="flex items-center gap-2 text-xs font-semibold text-slate-400 hover:text-white px-4 py-2 hover:bg-white/5 rounded-full border border-white/5">
             <LogOut size={16} /> Log Out
           </button>
@@ -330,14 +327,12 @@ const ShareModal = ({ bookmark, token, onClose }) => {
   const [currentShares, setCurrentShares] = useState([]);
   const [loading, setLoading] = useState(false);
 
-  // Fetch who it is shared with
   useEffect(() => {
     axios.get(`${API_URL}/bookmarks/${bookmark.id}/shares`, { headers: { Authorization: `Bearer ${token}` } })
       .then(res => setCurrentShares(res.data))
       .catch(() => {});
   }, []);
 
-  // Search logic
   useEffect(() => {
     if (query.length < 2) return setUsers([]);
     const timer = setTimeout(async () => {
@@ -353,7 +348,6 @@ const ShareModal = ({ bookmark, token, onClose }) => {
   const shareWith = async (userId) => {
     try {
       await axios.post(`${API_URL}/bookmarks/${bookmark.id}/share`, { receiverId: userId }, { headers: { Authorization: `Bearer ${token}` } });
-      // Refresh list
       const res = await axios.get(`${API_URL}/bookmarks/${bookmark.id}/shares`, { headers: { Authorization: `Bearer ${token}` } });
       setCurrentShares(res.data);
       setQuery(''); setUsers([]);
@@ -374,10 +368,8 @@ const ShareModal = ({ bookmark, token, onClose }) => {
           <h3 className="text-xl font-bold text-white">Share Bookmark</h3>
           <button onClick={onClose}><X size={20} className="text-slate-400 hover:text-white" /></button>
         </div>
-        
         <p className="text-sm text-slate-400 mb-4 line-clamp-1 border-b border-white/10 pb-4">{bookmark.title}</p>
-
-        {/* Current Shares */}
+        
         {currentShares.length > 0 && (
           <div className="mb-6">
             <h4 className="text-xs font-bold text-slate-500 uppercase tracking-wider mb-2">Currently Shared With</h4>
@@ -385,16 +377,13 @@ const ShareModal = ({ bookmark, token, onClose }) => {
               {currentShares.map(u => (
                 <div key={u.id} className="flex justify-between items-center p-2 bg-white/5 rounded-lg border border-white/5">
                   <span className="text-indigo-300 font-medium text-sm">@{u.username}</span>
-                  <button onClick={() => unshareWith(u.id)} className="p-1.5 bg-red-500/10 hover:bg-red-500 rounded text-red-400 hover:text-white transition">
-                    <UserMinus size={14} />
-                  </button>
+                  <button onClick={() => unshareWith(u.id)} className="p-1.5 bg-red-500/10 hover:bg-red-500 rounded text-red-400 hover:text-white transition"><UserMinus size={14} /></button>
                 </div>
               ))}
             </div>
           </div>
         )}
         
-        {/* Add New */}
         <h4 className="text-xs font-bold text-slate-500 uppercase tracking-wider mb-2">Add Person</h4>
         <div className="relative mb-2">
           <Search className="absolute left-3 top-3 text-slate-500" size={18} />
