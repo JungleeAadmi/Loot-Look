@@ -7,7 +7,7 @@ const path = require('path');
 const MOBILE_UA = 'Mozilla/5.0 (Linux; Android 14; Pixel 7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.6099.193 Mobile Safari/537.36';
 
 async function scrapeBookmark(url, screenshotDir) {
-    console.log(`🔍 Scraping: ${url}`);
+    console.log(`🔍 [Scraper] Starting: ${url}`);
     
     let browser = null;
     let data = {
@@ -20,19 +20,24 @@ async function scrapeBookmark(url, screenshotDir) {
     };
 
     try {
-        // Try to parse hostname for site_name safely
+        // Safe hostname parsing
         try {
             data.site_name = new URL(url).hostname.replace('www.', '');
         } catch (e) { data.site_name = 'Web'; }
 
         browser = await chromium.launch({
             headless: true,
-            args: ['--no-sandbox', '--disable-setuid-sandbox']
+            args: [
+                '--no-sandbox', 
+                '--disable-setuid-sandbox',
+                '--disable-dev-shm-usage', // <--- CRITICAL FIX FOR LXC CRASHES
+                '--disable-gpu'
+            ]
         });
 
         const context = await browser.newContext({
             userAgent: MOBILE_UA,
-            viewport: { width: 1080, height: 1920 }, // 1080x1920 Portrait
+            viewport: { width: 1080, height: 1920 },
             deviceScaleFactor: 2,
             isMobile: true,
             hasTouch: true,
@@ -42,74 +47,64 @@ async function scrapeBookmark(url, screenshotDir) {
 
         const page = await context.newPage();
 
-        // 1. Navigate with generous timeout
+        console.log(`   -> Navigating to ${url}...`);
         await page.goto(url, { waitUntil: 'domcontentloaded', timeout: 60000 });
         
-        // 2. Anti-Popup: Generic clicker for "Allow", "Accept", "Close"
-        // We use a safe wrapper so this never crashes the script
+        // Anti-Popup Logic
         const safeClick = async (selector) => {
             try {
                 const el = page.locator(selector).first();
                 if (await el.isVisible({ timeout: 2000 })) {
+                    console.log(`   -> Clicking popup: ${selector}`);
                     await el.click({ timeout: 1000 });
                     await page.waitForTimeout(500);
                 }
             } catch (e) {}
         };
 
-        // Try common popup buttons
         await safeClick('button:has-text("Accept")');
         await safeClick('button:has-text("Allow")');
         await safeClick('button:has-text("Confirm")');
         await safeClick('[aria-label="Close"]');
 
-        // 3. Scroll to load lazy images
+        // Scroll & Screenshot
         await page.evaluate(() => window.scrollBy(0, 600));
         await page.waitForTimeout(2000); 
 
-        // 4. Screenshot
         const fileName = `${Date.now()}_${Math.floor(Math.random()*1000)}.jpg`;
         const filePath = path.join(screenshotDir, fileName);
         if (!fs.existsSync(screenshotDir)) fs.mkdirSync(screenshotDir, { recursive: true });
         
         await page.screenshot({ path: filePath, quality: 60 });
         data.imagePath = `/screenshots/${fileName}`;
+        console.log(`   -> Screenshot saved.`);
 
-        // 5. Parse Data
+        // Extraction
         const content = await page.content();
         const $ = cheerio.load(content);
         
-        // Title Fallback
         data.title = $('meta[property="og:title"]').attr('content') || 
                      $('title').text().trim() || 
                      data.site_name;
 
-        // --- Price Extraction Strategy ---
-        
-        // Strategy A: JSON-LD (Best for E-commerce)
+        // Price Extraction (Layer 1: JSON-LD)
         $('script[type="application/ld+json"]').each((i, el) => {
             try {
                 const json = JSON.parse($(el).html());
                 const entities = Array.isArray(json) ? json : [json];
                 const product = entities.find(e => e['@type'] === 'Product');
-                
                 if (product) {
-                    let offer = null;
-                    if (Array.isArray(product.offers)) {
-                        offer = product.offers[0]; // Take first offer
-                    } else if (product.offers) {
-                        offer = product.offers;
-                    }
-                    
+                    const offer = Array.isArray(product.offers) ? product.offers[0] : product.offers;
                     if (offer) {
                         data.price = parseFloat(offer.price);
                         if (offer.priceCurrency) data.currency = offer.priceCurrency;
+                        console.log(`   -> Found JSON-LD Price: ${data.price}`);
                     }
                 }
             } catch (e) {}
         });
 
-        // Strategy B: CSS Selectors (Indian Sites)
+        // Price Extraction (Layer 2: Selectors)
         if (!data.price) {
             const selectors = [
                 '.a-price-whole',           // Amazon
@@ -124,26 +119,29 @@ async function scrapeBookmark(url, screenshotDir) {
                 const p = parsePrice(text);
                 if (p) {
                     data.price = p;
+                    console.log(`   -> Found Selector Price: ${p} (via ${sel})`);
                     break;
                 }
             }
         }
 
-        // Strategy C: Meta Tags
+        // Price Extraction (Layer 3: Meta)
         if (!data.price) {
             const metaPrice = $('meta[property="product:price:amount"]').attr('content');
-            if (metaPrice) data.price = parseFloat(metaPrice);
+            if (metaPrice) {
+                data.price = parseFloat(metaPrice);
+                console.log(`   -> Found Meta Price: ${data.price}`);
+            }
         }
 
-        // Final check
         if (data.price && !isNaN(data.price)) {
             data.isTracked = true;
         }
 
     } catch (error) {
-        console.error(`⚠️ Scrape warning for ${url}:`, error.message);
-        // We do NOT throw error here. We return partial data so the user at least gets a bookmark.
-        // This solves "Failed to add link".
+        console.error(`❌ [Scraper Error] ${url}:`, error.message);
+        // Return whatever data we gathered so far (e.g. at least the title/url)
+        // This prevents the "Failed to add" error on frontend
     } finally {
         if (browser) await browser.close();
     }
@@ -153,7 +151,6 @@ async function scrapeBookmark(url, screenshotDir) {
 
 function parsePrice(text) {
     if (!text) return null;
-    // Remove everything except digits and dots
     const clean = text.replace(/[^0-9.]/g, '');
     const num = parseFloat(clean);
     return isNaN(num) ? null : num;

@@ -20,7 +20,7 @@ startCronJobs();
 app.post('/api/auth/register', register);
 app.post('/api/auth/login', login);
 
-// --- SEARCH USERS (For Sharing) ---
+// --- SEARCH USERS ---
 app.get('/api/users/search', authenticateToken, async (req, res) => {
     const { q } = req.query;
     try {
@@ -34,27 +34,40 @@ app.get('/api/users/search', authenticateToken, async (req, res) => {
 
 // --- BOOKMARKS ---
 
-// 1. Add
+// 1. Add Bookmark (Updated with logging)
 app.post('/api/bookmarks', authenticateToken, async (req, res) => {
     const { url } = req.body;
+    console.log(`📝 [API] Request to add: ${url}`);
+    
     try {
         const screenshotDir = path.join(__dirname, '../public/screenshots');
+        
+        // 1. Scrape
         const data = await scrapeBookmark(url, screenshotDir);
+        console.log(`   -> Scrape result: ${data.title} (Price: ${data.price})`);
 
+        // 2. Insert into DB
         const result = await pool.query(`
             INSERT INTO bookmarks (user_id, url, title, image_url, site_name, is_tracked, current_price, currency)
             VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
             RETURNING *
         `, [req.user.id, url, data.title, data.imagePath, data.site_name, data.isTracked, data.price, data.currency]);
 
+        // 3. Track History
         if (data.isTracked) {
             await pool.query(`INSERT INTO price_history (bookmark_id, price) VALUES ($1, $2)`, [result.rows[0].id, data.price]);
         }
+        
+        console.log("   -> Saved to DB successfully.");
         res.json(result.rows[0]);
-    } catch (err) { res.status(500).json({ error: 'Failed' }); }
+
+    } catch (err) { 
+        console.error("❌ [API Error] Failed to add bookmark:", err); // Prints full error to console
+        res.status(500).json({ error: 'Failed to add link. Check server logs.' }); 
+    }
 });
 
-// 2. Get All (Own + Shared)
+// 2. Get All
 app.get('/api/bookmarks', authenticateToken, async (req, res) => {
     try {
         const result = await pool.query(`
@@ -74,11 +87,10 @@ app.get('/api/bookmarks', authenticateToken, async (req, res) => {
     } catch (err) { res.status(500).json({ error: 'Failed' }); }
 });
 
-// 3. Share Bookmark
+// 3. Share
 app.post('/api/bookmarks/:id/share', authenticateToken, async (req, res) => {
     const { receiverId } = req.body;
     try {
-        // Verify ownership
         const check = await pool.query('SELECT * FROM bookmarks WHERE id = $1 AND user_id = $2', [req.params.id, req.user.id]);
         if (check.rows.length === 0) return res.status(403).json({ error: 'Unauthorized' });
 
@@ -101,7 +113,6 @@ app.post('/api/bookmarks/:id/check', authenticateToken, async (req, res) => {
         const data = await scrapeBookmark(bm.rows[0].url, screenshotDir);
 
         if (data.price) {
-            // Update logic: Set previous_price to oldPrice
             await pool.query(`
                 UPDATE bookmarks 
                 SET current_price = $1, previous_price = $2, last_checked = NOW() 
