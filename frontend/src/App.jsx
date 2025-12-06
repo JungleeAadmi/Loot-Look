@@ -1,18 +1,16 @@
 import React, { useState, useEffect } from 'react';
 import { 
   LogOut, ExternalLink, RefreshCw, ShoppingBag, Link as LinkIcon, Loader2,
-  Share2, Trash2, Eye, X, Plus, Search, Copy, Download, UserMinus, LogOut as LeaveIcon
+  Share2, Trash2, Eye, X, Plus, Search, Copy, Download, UserMinus, LogOut as LeaveIcon,
+  ScanSearch // New Icon for OCR
 } from 'lucide-react';
 import axios from 'axios';
 
 const API_URL = '/api';
 
-// Date Formatter: Dynamic (Browser Local Time)
-// This will show IST for you, and EST for someone in New York automatically.
 const formatDate = (dateString) => {
   if (!dateString) return 'Never';
   return new Date(dateString).toLocaleString('en-IN', {
-    // Removed 'timeZone' so it defaults to the User's System Time
     day: '2-digit', month: 'short', year: '2-digit',
     hour: '2-digit', minute: '2-digit', hour12: true
   });
@@ -145,7 +143,6 @@ const Dashboard = ({ user, token, onLogout, openSnip }) => {
     if (!newUrl) return;
     setAdding(true);
     try {
-      // Send device time so the DB gets the exact creation moment
       const clientTime = new Date().toISOString();
       await axios.post(`${API_URL}/bookmarks`, { url: newUrl, clientTime }, { headers: { Authorization: `Bearer ${token}` } });
       setNewUrl('');
@@ -218,6 +215,7 @@ const Dashboard = ({ user, token, onLogout, openSnip }) => {
 
 const BookmarkCard = ({ data, token, refreshData, onSnip, onShare }) => {
   const [checking, setChecking] = useState(false);
+  const [scanning, setScanning] = useState(false); // OCR Loading State
   const [imgError, setImgError] = useState(false);
 
   useEffect(() => { setImgError(false); }, [data.image_url]);
@@ -231,6 +229,20 @@ const BookmarkCard = ({ data, token, refreshData, onSnip, onShare }) => {
       refreshData();
     } catch (err) { console.error(err); } 
     finally { setChecking(false); }
+  };
+
+  const handleOCR = async () => {
+    setScanning(true);
+    try {
+      const res = await axios.post(`${API_URL}/bookmarks/${data.id}/ocr`, {}, { headers: { Authorization: `Bearer ${token}` } });
+      if(res.data.price) {
+        alert(`Price Found: ${res.data.price}`);
+        refreshData();
+      } else {
+        alert("No price detected in image.");
+      }
+    } catch (err) { alert("OCR Failed"); }
+    finally { setScanning(false); }
   };
 
   const handleDelete = async () => {
@@ -308,9 +320,13 @@ const BookmarkCard = ({ data, token, refreshData, onSnip, onShare }) => {
           <button onClick={onSnip} className="btn-icon p-2 rounded-lg flex justify-center col-span-1" title="View Screenshot"><Eye size={16} /></button>
           <button onClick={onShare} className="btn-icon p-2 rounded-lg flex justify-center col-span-1" title="Share Settings"><Share2 size={16} /></button>
           <button onClick={handleCopy} className="btn-icon p-2 rounded-lg flex justify-center col-span-1" title="Copy Link"><Copy size={16} /></button>
-          <a href={data.url} target="_blank" rel="noreferrer" className="btn-icon p-2 rounded-lg flex justify-center items-center col-span-3 bg-indigo-600/10 hover:bg-indigo-600/20 text-indigo-400 hover:text-indigo-300" title="Open Website">
-            <span className="text-xs font-bold mr-2">OPEN LINK</span> <ExternalLink size={14} />
+          
+          <a href={data.url} target="_blank" rel="noreferrer" className="btn-icon p-2 rounded-lg flex justify-center items-center col-span-2 bg-indigo-600/10 hover:bg-indigo-600/20 text-indigo-400 hover:text-indigo-300" title="Open Website">
+            <ExternalLink size={16} />
           </a>
+          <button onClick={(e) => {e.stopPropagation(); handleOCR()}} className="btn-icon p-2 rounded-lg flex justify-center col-span-1 bg-teal-500/10 hover:bg-teal-500/20 text-teal-400" title="Scan Price from Image">
+            <ScanSearch size={16} className={scanning ? 'animate-pulse' : ''} />
+          </button>
           <button onClick={(e) => {e.stopPropagation(); handleDelete()}} className="p-2 rounded-lg bg-red-500/10 hover:bg-red-600 text-red-500 hover:text-white transition flex justify-center col-span-1" title="Delete">
             <Trash2 size={16} />
           </button>

@@ -2,10 +2,11 @@ const { chromium } = require('playwright');
 const cheerio = require('cheerio');
 const fs = require('fs');
 const path = require('path');
-const { extractPriceFromImage } = require('./ocr'); // Import OCR
+const { extractPriceFromImage } = require('./ocr'); 
 
 const DESKTOP_UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36';
 
+// 1. Main Scraper Function
 async function scrapeBookmark(url, screenshotDir) {
     console.log(`🔍 [Scraper] Starting: ${url}`);
     
@@ -31,14 +32,14 @@ async function scrapeBookmark(url, screenshotDir) {
                 '--disable-setuid-sandbox',
                 '--disable-dev-shm-usage',
                 '--disable-gpu',
-                '--window-size=1280,1024',
+                '--window-size=1080,1920', // Matched to viewport
                 '--disable-blink-features=AutomationControlled'
             ]
         });
 
         const context = await browser.newContext({
             userAgent: DESKTOP_UA,
-            viewport: { width: 1280, height: 1024 },
+            viewport: { width: 1080, height: 1920 }, // 1080p Portrait Mode
             deviceScaleFactor: 1,
             isMobile: false,
             hasTouch: false,
@@ -129,20 +130,6 @@ async function scrapeBookmark(url, screenshotDir) {
             if (metaPrice) data.price = parseFloat(metaPrice);
         }
 
-        // --- LAYER 4: OCR BACKUP (The New Feature) ---
-        // If all else fails, use computer vision
-        if (!data.price && data.imagePath) {
-            console.log("   ⚠️ Standard scraping failed. Attempting OCR backup...");
-            // We pass the absolute path to the OCR module
-            // Note: screenshotDir is relative in the function arg, we need absolute for tesseract
-            const absPath = path.resolve(screenshotDir, fileName);
-            const ocrPrice = await extractPriceFromImage(absPath);
-            if (ocrPrice) {
-                data.price = ocrPrice;
-            }
-        }
-        // ----------------------------------------------
-
         if (data.price && !isNaN(data.price)) data.isTracked = true;
 
     } catch (error) {
@@ -154,6 +141,19 @@ async function scrapeBookmark(url, screenshotDir) {
     return data;
 }
 
+// 2. On-Demand OCR Function (New Export)
+async function scanImageForPrice(imageRelativePath, publicDir) {
+    // imageRelativePath is like "/screenshots/123.jpg"
+    // publicDir is the absolute path to "backend/public"
+    const fileName = path.basename(imageRelativePath);
+    const absPath = path.join(publicDir, 'screenshots', fileName);
+    
+    if (!fs.existsSync(absPath)) return null;
+
+    console.log(`👁️ [OCR Demand] Scanning: ${absPath}`);
+    return await extractPriceFromImage(absPath);
+}
+
 function parsePrice(text) {
     if (!text) return null;
     const clean = text.replace(/[^0-9.]/g, '');
@@ -161,4 +161,4 @@ function parsePrice(text) {
     return isNaN(num) ? null : num;
 }
 
-module.exports = { scrapeBookmark };
+module.exports = { scrapeBookmark, scanImageForPrice };

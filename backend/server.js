@@ -2,7 +2,7 @@ const express = require('express');
 const cors = require('cors');
 const path = require('path');
 const { initDB, pool } = require('./db');
-const { scrapeBookmark } = require('./scraper');
+const { scrapeBookmark, scanImageForPrice } = require('./scraper'); // Imported new function
 const { startCronJobs } = require('./cron');
 const { authenticateToken, register, login } = require('./auth');
 
@@ -36,14 +36,13 @@ app.get('/api/users/search', authenticateToken, async (req, res) => {
 // --- BOOKMARKS ---
 
 app.post('/api/bookmarks', authenticateToken, async (req, res) => {
-    const { url } = req.body; // Removed clientTime
+    const { url } = req.body;
     console.log(`📝 [API] Request to add: ${url}`);
     try {
         const screenshotDir = path.join(__dirname, '../public/screenshots');
         const data = await scrapeBookmark(url, screenshotDir);
         console.log(`   -> Scrape result: ${data.title}`);
 
-        // FIX: Use Postgres NOW() to ensure Server Time (IST) is used
         const result = await pool.query(`
             INSERT INTO bookmarks (user_id, url, title, image_url, site_name, is_tracked, current_price, currency, created_at)
             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, NOW())
@@ -145,6 +144,30 @@ app.post('/api/bookmarks/:id/check', authenticateToken, async (req, res) => {
         }
         res.json({ message: 'Updated', price: data.price });
     } catch (err) { res.status(500).json({ error: 'Failed' }); }
+});
+
+// NEW: Force OCR on Demand
+app.post('/api/bookmarks/:id/ocr', authenticateToken, async (req, res) => {
+    try {
+        const bm = await pool.query('SELECT * FROM bookmarks WHERE id = $1', [req.params.id]);
+        if (bm.rows.length === 0) return res.status(404).send('Not found');
+
+        const bookmark = bm.rows[0];
+        if (!bookmark.image_url) return res.status(400).json({ error: 'No image to scan' });
+
+        const publicDir = path.join(__dirname, '../public');
+        const price = await scanImageForPrice(bookmark.image_url, publicDir);
+
+        if (price) {
+            await pool.query(`
+                UPDATE bookmarks SET current_price = $1, is_tracked = TRUE WHERE id = $2
+            `, [price, req.params.id]);
+            await pool.query('INSERT INTO price_history (bookmark_id, price) VALUES ($1, $2)', [req.params.id, price]);
+            res.json({ message: 'Price found via OCR', price });
+        } else {
+            res.json({ message: 'No price found in image', price: null });
+        }
+    } catch (err) { res.status(500).json({ error: 'OCR Failed' }); }
 });
 
 app.delete('/api/bookmarks/:id', authenticateToken, async (req, res) => {
