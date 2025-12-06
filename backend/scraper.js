@@ -3,8 +3,8 @@ const cheerio = require('cheerio');
 const fs = require('fs');
 const path = require('path');
 
-// Mobile User Agent (Pixel 7) - Gets better prices, fewer popups
-const MOBILE_UA = 'Mozilla/5.0 (Linux; Android 14; Pixel 7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.6099.193 Mobile Safari/537.36';
+// Desktop User Agent - Looks like a real Windows PC
+const DESKTOP_UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36';
 
 async function scrapeBookmark(url, screenshotDir) {
     console.log(`🔍 [Scraper] Starting: ${url}`);
@@ -24,52 +24,47 @@ async function scrapeBookmark(url, screenshotDir) {
             data.site_name = new URL(url).hostname.replace('www.', '');
         } catch (e) { data.site_name = 'Web'; }
 
+        // HEADFUL MODE: This will render the GUI inside the Xvfb virtual screen
         browser = await chromium.launch({
-            headless: true,
+            headless: false, // Run visible (but hidden inside Xvfb)
             args: [
                 '--no-sandbox', 
                 '--disable-setuid-sandbox',
                 '--disable-dev-shm-usage',
                 '--disable-gpu',
-                '--disable-blink-features=AutomationControlled', // Critical for Bot Detection
-                '--font-render-hinting=none' 
+                '--window-size=1280,1024', // Match Xvfb resolution
+                '--disable-blink-features=AutomationControlled'
             ]
         });
 
         const context = await browser.newContext({
-            userAgent: MOBILE_UA,
-            viewport: { width: 1080, height: 1920 },
-            deviceScaleFactor: 2,
-            isMobile: true,
-            hasTouch: true,
+            userAgent: DESKTOP_UA,
+            viewport: { width: 1280, height: 1024 }, // Desktop resolution
+            deviceScaleFactor: 1,
+            isMobile: false,
+            hasTouch: false,
             locale: 'en-IN',
             timezoneId: 'Asia/Kolkata',
             extraHTTPHeaders: {
                 'Accept-Language': 'en-US,en;q=0.9',
-                'Upgrade-Insecure-Requests': '1',
-                'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8'
             }
         });
 
-        // STEALTH SCRIPT: Hide WebDriver property
+        // Stealth Script
         await context.addInitScript(() => {
-            Object.defineProperty(navigator, 'webdriver', {
-                get: () => undefined,
-            });
+            Object.defineProperty(navigator, 'webdriver', { get: () => undefined });
         });
 
         const page = await context.newPage();
 
-        // 1. ROBUST NAVIGATION
         try {
             console.log(`   -> Navigating to ${url}...`);
-            // Wait until 'domcontentloaded' first (fastest), then wait for visual paint
             await page.goto(url, { waitUntil: 'domcontentloaded', timeout: 60000 });
         } catch (navError) {
-            console.warn(`   ⚠️ Navigation timeout/partial load. Proceeding to scrape anyway.`);
+            console.warn(`   ⚠️ Navigation timeout. Proceeding anyway.`);
         }
         
-        // 2. Anti-Popup (Best Effort)
+        // Anti-Popup logic remains...
         const safeClick = async (selector) => {
             try {
                 const el = page.locator(selector).first();
@@ -78,26 +73,20 @@ async function scrapeBookmark(url, screenshotDir) {
                 }
             } catch (e) {}
         };
-
         await safeClick('button:has-text("Accept")');
-        await safeClick('button:has-text("Allow")');
         await safeClick('[aria-label="Close"]');
 
-        // 3. FORCE PAINT & SCROLL (Fix for blank screenshots)
+        // Scroll Logic
         try {
             await page.evaluate(async () => {
-                // Scroll down to force layout calculation
-                window.scrollTo(0, document.body.scrollHeight / 3);
-                await new Promise(r => setTimeout(r, 800));
-                // Scroll back up
+                window.scrollTo(0, document.body.scrollHeight / 2);
+                await new Promise(r => setTimeout(r, 1000));
                 window.scrollTo(0, 0);
-                // Force a repaint (sometimes helps headless chrome)
-                document.body.getBoundingClientRect(); 
             });
-            await page.waitForTimeout(1500); 
+            await page.waitForTimeout(2000); 
         } catch (e) {}
 
-        // 4. SCREENSHOT (Guaranteed execution now)
+        // Screenshot
         const fileName = `${Date.now()}_${Math.floor(Math.random()*1000)}.jpg`;
         const filePath = path.join(screenshotDir, fileName);
         if (!fs.existsSync(screenshotDir)) fs.mkdirSync(screenshotDir, { recursive: true });
@@ -106,17 +95,16 @@ async function scrapeBookmark(url, screenshotDir) {
         data.imagePath = `/screenshots/${fileName}`;
         console.log(`   -> Screenshot saved.`);
 
-        // 5. Parse Data
+        // ... (Parsing logic remains the same) ...
         const content = await page.content();
         const $ = cheerio.load(content);
         
-        // Improved Title Extraction
         data.title = $('h1').first().text().trim() || 
                      $('meta[property="og:title"]').attr('content') || 
                      $('title').text().trim() || 
                      data.site_name;
 
-        // --- Price Layer 1: JSON-LD ---
+        // Price Layer 1: JSON-LD
         $('script[type="application/ld+json"]').each((i, el) => {
             try {
                 const json = JSON.parse($(el).html());
@@ -132,19 +120,9 @@ async function scrapeBookmark(url, screenshotDir) {
             } catch (e) {}
         });
 
-        // --- Price Layer 2: Visual Selectors (Updated for Myntra) ---
+        // Price Layer 2: Selectors
         if (!data.price) {
-            const selectors = [
-                '.pdp-price strong',        // Myntra Specific
-                '.pdp-price',               // Myntra Generic
-                '.a-price-whole',           // Amazon
-                'div[class*="_30jeq3"]',    // Flipkart
-                'h4:contains("₹")',         // Meesho
-                '.price', 
-                '[class*="price"]',
-                '[data-testid="price"]'
-            ];
-
+            const selectors = ['.pdp-price strong', '.pdp-price', '.a-price-whole', 'div[class*="_30jeq3"]', 'h4:contains("₹")', '.price', '[class*="price"]'];
             for (const sel of selectors) {
                 const text = $(sel).first().text();
                 const p = parsePrice(text);
@@ -152,7 +130,7 @@ async function scrapeBookmark(url, screenshotDir) {
             }
         }
 
-        // --- Price Layer 3: Meta Tags ---
+        // Price Layer 3: Meta
         if (!data.price) {
             const metaPrice = $('meta[property="product:price:amount"]').attr('content') || 
                               $('meta[property="og:price:amount"]').attr('content');
@@ -163,8 +141,6 @@ async function scrapeBookmark(url, screenshotDir) {
 
     } catch (error) {
         console.error(`❌ [Scraper Error] ${url}:`, error.message);
-        // Even if everything crashes, we try to return whatever data we have
-        // so the bookmark is at least saved with the URL.
     } finally {
         if (browser) await browser.close();
     }

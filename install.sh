@@ -1,6 +1,6 @@
 #!/bin/bash
 
-# LootLook Installer v4 (Timezone Priority)
+# LootLook Installer v5 (Headful Scraper Support)
 # Repo: https://github.com/JungleeAadmi/Loot-Look
 
 set -e
@@ -9,7 +9,7 @@ GREEN='\033[0;32m'
 YELLOW='\033[1;33m'
 NC='\033[0m'
 
-echo -e "${GREEN}--- STARTING LOOTLOOK INSTALLER v4 ---${NC}"
+echo -e "${GREEN}--- STARTING LOOTLOOK INSTALLER v5 ---${NC}"
 
 # 1. Root Check
 if [[ $EUID -ne 0 ]]; then
@@ -17,28 +17,23 @@ if [[ $EUID -ne 0 ]]; then
    exit 1
 fi
 
-# 2. TIMEZONE SETUP (Done FIRST to ensure DB picks it up)
+# 2. TIMEZONE SETUP
 echo -e "${YELLOW}Step 1: Configure System Timezone${NC}"
-# Check if tzdata is installed, if not install it temporarily
 if ! dpkg -s tzdata >/dev/null 2>&1; then
     apt-get update && apt-get install -y tzdata
 fi
-
-# Force interactive configuration
 unset DEBIAN_FRONTEND
 dpkg-reconfigure tzdata
-
 echo -e "${GREEN}Timezone set to: $(cat /etc/timezone)${NC}"
-echo -e "${GREEN}Current Time: $(date)${NC}"
 
 # 3. Update System
 echo -e "${YELLOW}Step 2: Updating system packages...${NC}"
 export DEBIAN_FRONTEND=noninteractive
 apt-get update && apt-get upgrade -y
 
-# 4. Install Dependencies (Postgres installed HERE, after Timezone is set)
+# 4. Install Dependencies (Added xvfb for headful scraping)
 echo -e "${YELLOW}Step 3: Installing core dependencies...${NC}"
-apt-get install -y curl git build-essential postgresql postgresql-contrib wget
+apt-get install -y curl git build-essential postgresql postgresql-contrib wget xvfb libx11-dev
 
 # 5. Install Node.js 20
 if ! command -v node &> /dev/null; then
@@ -79,7 +74,6 @@ generate_env() {
     echo "PORT=3000" >> $APP_DIR/backend/.env
 }
 
-# Restart Postgres to ensure it locks in the new timezone
 systemctl restart postgresql
 
 if ! sudo -u postgres psql -tAc "SELECT 1 FROM pg_roles WHERE rolname='$DB_USER'" | grep -q 1; then
@@ -115,7 +109,6 @@ apt-get install -y libnss3 libnspr4 libatk1.0-0 libatk-bridge2.0-0 libcups2 libd
     libxkbcommon0 libxcomposite1 libxdamage1 libxfixes3 libxrandr2 libgbm1 \
     libpango-1.0-0 libcairo2 libasound2
 
-# Fix libicu issue for bleeding edge Ubuntu
 if ! dpkg -l | grep -q libicu74; then
     echo -e "${YELLOW}Polyfilling libicu74...${NC}"
     wget -q http://archive.ubuntu.com/ubuntu/pool/main/i/icu/libicu74_74.2-1ubuntu3_amd64.deb
@@ -132,7 +125,7 @@ cd $APP_DIR/frontend
 npm install
 npm run build
 
-# 11. System Service
+# 11. System Service (Updated to use xvfb-run)
 echo -e "${YELLOW}Restarting Service...${NC}"
 cat <<EOF > /etc/systemd/system/lootlook.service
 [Unit]
@@ -143,7 +136,8 @@ After=network.target postgresql.service
 Type=simple
 User=root
 WorkingDirectory=$APP_DIR/backend
-ExecStart=/usr/bin/node server.js
+# CRITICAL: We run node inside a virtual X11 display
+ExecStart=/usr/bin/xvfb-run --auto-servernum --server-args='-screen 0 1280x1024x24' /usr/bin/node server.js
 Restart=on-failure
 Environment=NODE_ENV=production
 
