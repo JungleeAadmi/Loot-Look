@@ -2,9 +2,10 @@ import React, { useState, useEffect } from 'react';
 import { 
   LogOut, ExternalLink, RefreshCw, ShoppingBag, Link as LinkIcon, Loader2,
   Share2, Trash2, Eye, X, Plus, Search, Copy, Download, UserMinus, LogOut as LeaveIcon,
-  ScanSearch 
+  ScanSearch, Filter 
 } from 'lucide-react';
 import axios from 'axios';
+import { AreaChart, Area, XAxis, YAxis, Tooltip, ResponsiveContainer } from 'recharts';
 
 const API_URL = '/api';
 
@@ -20,7 +21,8 @@ const App = () => {
   const [user, setUser] = useState(null);
   const [token, setToken] = useState(localStorage.getItem('token'));
   const [view, setView] = useState('loading');
-  const [snipImage, setSnipImage] = useState(null); 
+  const [snipImage, setSnipImage] = useState(null);
+  const [historyItem, setHistoryItem] = useState(null); // { id, title, currency }
 
   useEffect(() => {
     const storedUser = localStorage.getItem('user');
@@ -55,7 +57,13 @@ const App = () => {
       {view === 'login' && <AuthForm type="login" onAuth={handleLogin} onSwitch={() => setView('register')} />}
       {view === 'register' && <AuthForm type="register" onAuth={handleLogin} onSwitch={() => setView('login')} />}
       {view === 'dashboard' && user && (
-        <Dashboard user={user} token={token} onLogout={handleLogout} openSnip={(img) => setSnipImage(img)} />
+        <Dashboard 
+          user={user} 
+          token={token} 
+          onLogout={handleLogout} 
+          openSnip={(img) => setSnipImage(img)}
+          openHistory={(item) => setHistoryItem(item)}
+        />
       )}
 
       {snipImage && (
@@ -66,6 +74,8 @@ const App = () => {
           </div>
         </div>
       )}
+
+      {historyItem && <HistoryModal item={historyItem} token={token} onClose={() => setHistoryItem(null)} />}
     </div>
   );
 };
@@ -113,13 +123,14 @@ const AuthForm = ({ type, onAuth, onSwitch }) => {
   );
 };
 
-const Dashboard = ({ user, token, onLogout, openSnip }) => {
+const Dashboard = ({ user, token, onLogout, openSnip, openHistory }) => {
   const [bookmarks, setBookmarks] = useState([]);
   const [loading, setLoading] = useState(true);
   const [syncing, setSyncing] = useState(false);
   const [adding, setAdding] = useState(false);
   const [newUrl, setNewUrl] = useState('');
   const [shareModalData, setShareModalData] = useState(null); 
+  const [filter, setFilter] = useState('All');
 
   const fetchBookmarks = async (isBackground = false) => {
     if (!isBackground) setSyncing(true);
@@ -143,8 +154,7 @@ const Dashboard = ({ user, token, onLogout, openSnip }) => {
     if (!newUrl) return;
     setAdding(true);
     try {
-      const clientTime = new Date().toISOString();
-      await axios.post(`${API_URL}/bookmarks`, { url: newUrl, clientTime }, { headers: { Authorization: `Bearer ${token}` } });
+      await axios.post(`${API_URL}/bookmarks`, { url: newUrl }, { headers: { Authorization: `Bearer ${token}` } });
       setNewUrl('');
       fetchBookmarks();
     } catch (err) { alert('Failed to add link. Please try again.'); } 
@@ -156,7 +166,7 @@ const Dashboard = ({ user, token, onLogout, openSnip }) => {
     const rows = bookmarks.map(b => [
       `"${b.title.replace(/"/g, '""')}"`,
       b.current_price || 0,
-      b.currency || 'INR', // Export currency too
+      b.currency || 'INR',
       b.url,
       formatDate(b.created_at),
       formatDate(b.last_checked)
@@ -170,6 +180,10 @@ const Dashboard = ({ user, token, onLogout, openSnip }) => {
     link.click();
     document.body.removeChild(link);
   };
+
+  // Filter Logic
+  const sites = ['All', ...new Set(bookmarks.map(b => b.site_name || 'Web'))].sort();
+  const filteredBookmarks = filter === 'All' ? bookmarks : bookmarks.filter(b => (b.site_name || 'Web') === filter);
 
   return (
     <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
@@ -185,7 +199,20 @@ const Dashboard = ({ user, token, onLogout, openSnip }) => {
           <button type="submit" disabled={adding} className="absolute right-1.5 top-1.5 bottom-1.5 px-4 rounded-lg bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-bold shadow-md">Add</button>
         </form>
         
-        <div className="w-full md:w-auto flex justify-end gap-2">
+        <div className="w-full md:w-auto flex justify-end gap-2 items-center">
+          
+          {/* Filter Dropdown */}
+          <div className="relative">
+            <select 
+              value={filter} 
+              onChange={(e) => setFilter(e.target.value)}
+              className="appearance-none bg-white/5 border border-white/10 text-slate-300 text-xs font-semibold rounded-full pl-4 pr-8 py-2 hover:bg-white/10 focus:outline-none cursor-pointer"
+            >
+              {sites.map(site => <option key={site} value={site} className="bg-slate-800 text-white">{site}</option>)}
+            </select>
+            <Filter size={14} className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 pointer-events-none" />
+          </div>
+
           <button onClick={downloadCSV} className="flex items-center gap-2 px-4 py-2 hover:bg-white/5 rounded-full text-slate-400 hover:text-white transition" title="Export CSV"><Download size={18} /></button>
           <button onClick={() => fetchBookmarks(false)} className="flex items-center gap-2 px-4 py-2 hover:bg-white/5 rounded-full text-slate-400 hover:text-white transition" title="Sync Now"><RefreshCw size={18} className={syncing ? 'animate-spin' : ''} /></button>
           <button onClick={onLogout} className="flex items-center gap-2 text-xs font-semibold text-slate-400 hover:text-white px-4 py-2 hover:bg-white/5 rounded-full border border-white/5"><LogOut size={16} /> Log Out</button>
@@ -196,13 +223,14 @@ const Dashboard = ({ user, token, onLogout, openSnip }) => {
         <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-6">{[1,2,3,4].map(i => <div key={i} className="h-80 rounded-2xl bg-white/5 animate-pulse"></div>)}</div>
       ) : (
         <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-6">
-          {bookmarks.map(bm => (
+          {filteredBookmarks.map(bm => (
             <BookmarkCard 
               key={bm.id} 
               data={bm} 
               token={token}
               refreshData={() => fetchBookmarks(true)}
               onSnip={() => openSnip(bm.image_url)}
+              onHistory={() => openHistory(bm)}
               onShare={() => setShareModalData(bm)}
             />
           ))}
@@ -214,24 +242,17 @@ const Dashboard = ({ user, token, onLogout, openSnip }) => {
   );
 };
 
-const BookmarkCard = ({ data, token, refreshData, onSnip, onShare }) => {
+const BookmarkCard = ({ data, token, refreshData, onSnip, onShare, onHistory }) => {
   const [checking, setChecking] = useState(false);
   const [scanning, setScanning] = useState(false); 
   const [imgError, setImgError] = useState(false);
 
   useEffect(() => { setImgError(false); }, [data.image_url]);
 
-  // DYNAMIC CURRENCY FORMATTER
   const fmt = (p) => {
     try {
-      return new Intl.NumberFormat('en-US', { // en-US locale handles most symbols well
-        style: 'currency', 
-        currency: data.currency || 'INR', 
-        maximumFractionDigits: 0 
-      }).format(p);
-    } catch (e) {
-      return p; // Fallback if currency code is weird
-    }
+      return new Intl.NumberFormat('en-US', { style: 'currency', currency: data.currency || 'INR', maximumFractionDigits: 0 }).format(p);
+    } catch (e) { return p; }
   };
 
   const handleCheck = async () => {
@@ -247,12 +268,8 @@ const BookmarkCard = ({ data, token, refreshData, onSnip, onShare }) => {
     setScanning(true);
     try {
       const res = await axios.post(`${API_URL}/bookmarks/${data.id}/ocr`, {}, { headers: { Authorization: `Bearer ${token}` } });
-      if(res.data.price) {
-        alert(`Price Found: ${res.data.price}`);
-        refreshData();
-      } else {
-        alert("No price detected in image.");
-      }
+      if(res.data.price) { alert(`Price Found: ${res.data.price}`); refreshData(); } 
+      else { alert("No price detected in image."); }
     } catch (err) { alert("OCR Failed"); }
     finally { setScanning(false); }
   };
@@ -266,10 +283,8 @@ const BookmarkCard = ({ data, token, refreshData, onSnip, onShare }) => {
   };
 
   const handleCopy = async () => {
-    try {
-      await navigator.clipboard.writeText(data.url);
-      alert('Link copied!');
-    } catch (err) {
+    try { await navigator.clipboard.writeText(data.url); alert('Link copied!'); } 
+    catch (err) {
       const textArea = document.createElement("textarea");
       textArea.value = data.url;
       document.body.appendChild(textArea);
@@ -291,20 +306,11 @@ const BookmarkCard = ({ data, token, refreshData, onSnip, onShare }) => {
         ) : (
           <div className="absolute inset-0 flex items-center justify-center bg-slate-800"><ShoppingBag size={32} className="text-slate-600" /></div>
         )}
-        
         <div className="absolute top-3 left-3 right-3 flex justify-between">
           <div className="flex gap-1 flex-wrap">
             {data.is_tracked && <span className="bg-emerald-500/90 text-white text-[10px] font-bold px-2 py-1 rounded shadow">TRACKING</span>}
-            {data.shared_by && (
-              <button onClick={(e) => {e.stopPropagation(); onShare();}} className="bg-purple-500/90 hover:bg-purple-600 text-white text-[10px] font-bold px-2 py-1 rounded shadow transition">
-                FROM @{data.shared_by}
-              </button>
-            )}
-            {data.shared_with && (
-              <button onClick={(e) => {e.stopPropagation(); onShare();}} className="bg-blue-500/90 hover:bg-blue-600 text-white text-[10px] font-bold px-2 py-1 rounded shadow transition">
-                TO @{data.shared_with}
-              </button>
-            )}
+            {data.shared_by && <button onClick={(e) => {e.stopPropagation(); onShare();}} className="bg-purple-500/90 hover:bg-purple-600 text-white text-[10px] font-bold px-2 py-1 rounded shadow transition">FROM @{data.shared_by}</button>}
+            {data.shared_with && <button onClick={(e) => {e.stopPropagation(); onShare();}} className="bg-blue-500/90 hover:bg-blue-600 text-white text-[10px] font-bold px-2 py-1 rounded shadow transition">TO @{data.shared_with}</button>}
           </div>
         </div>
       </div>
@@ -313,7 +319,7 @@ const BookmarkCard = ({ data, token, refreshData, onSnip, onShare }) => {
         <h3 className="text-sm font-medium text-slate-200 line-clamp-2 h-10 mb-4 leading-snug" title={data.title}>{data.title}</h3>
         <div className="mt-auto mb-4">
           {data.is_tracked ? (
-            <div>
+            <div onClick={onHistory} className="cursor-pointer hover:opacity-80 transition">
               {data.previous_price && (<span className="text-xs text-slate-500 line-through mr-2">{fmt(data.previous_price)}</span>)}
               <div className={`text-2xl font-bold ${priceColor} tracking-tight`}>{fmt(data.current_price)}</div>
             </div>
@@ -326,22 +332,65 @@ const BookmarkCard = ({ data, token, refreshData, onSnip, onShare }) => {
           <div className="flex justify-between"><span>Added:</span> <span className="font-mono text-slate-400">{formatDate(data.created_at)}</span></div>
         </div>
         <div className="grid grid-cols-4 gap-2">
-          <button onClick={(e) => {e.stopPropagation(); handleCheck()}} className="btn-icon p-2 rounded-lg flex justify-center col-span-1" title="Refresh Price">
-            <RefreshCw size={16} className={checking ? 'animate-spin text-indigo-400' : ''} />
-          </button>
+          <button onClick={(e) => {e.stopPropagation(); handleCheck()}} className="btn-icon p-2 rounded-lg flex justify-center col-span-1" title="Refresh Price"><RefreshCw size={16} className={checking ? 'animate-spin text-indigo-400' : ''} /></button>
           <button onClick={onSnip} className="btn-icon p-2 rounded-lg flex justify-center col-span-1" title="View Screenshot"><Eye size={16} /></button>
           <button onClick={onShare} className="btn-icon p-2 rounded-lg flex justify-center col-span-1" title="Share Settings"><Share2 size={16} /></button>
           <button onClick={handleCopy} className="btn-icon p-2 rounded-lg flex justify-center col-span-1" title="Copy Link"><Copy size={16} /></button>
-          <a href={data.url} target="_blank" rel="noreferrer" className="btn-icon p-2 rounded-lg flex justify-center items-center col-span-2 bg-indigo-600/10 hover:bg-indigo-600/20 text-indigo-400 hover:text-indigo-300" title="Open Website">
-            <ExternalLink size={16} />
-          </a>
-          <button onClick={(e) => {e.stopPropagation(); handleOCR()}} className="btn-icon p-2 rounded-lg flex justify-center col-span-1 bg-teal-500/10 hover:bg-teal-500/20 text-teal-400" title="Scan Price from Image">
-            <ScanSearch size={16} className={scanning ? 'animate-pulse' : ''} />
-          </button>
-          <button onClick={(e) => {e.stopPropagation(); handleDelete()}} className="p-2 rounded-lg bg-red-500/10 hover:bg-red-600 text-red-500 hover:text-white transition flex justify-center col-span-1" title="Delete">
-            <Trash2 size={16} />
-          </button>
+          <a href={data.url} target="_blank" rel="noreferrer" className="btn-icon p-2 rounded-lg flex justify-center items-center col-span-2 bg-indigo-600/10 hover:bg-indigo-600/20 text-indigo-400 hover:text-indigo-300" title="Open Website"><ExternalLink size={16} /></a>
+          <button onClick={(e) => {e.stopPropagation(); handleOCR()}} className="btn-icon p-2 rounded-lg flex justify-center col-span-1 bg-teal-500/10 hover:bg-teal-500/20 text-teal-400" title="Scan Price"><ScanSearch size={16} className={scanning ? 'animate-pulse' : ''} /></button>
+          <button onClick={(e) => {e.stopPropagation(); handleDelete()}} className="p-2 rounded-lg bg-red-500/10 hover:bg-red-600 text-red-500 hover:text-white transition flex justify-center col-span-1" title="Delete"><Trash2 size={16} /></button>
         </div>
+      </div>
+    </div>
+  );
+};
+
+const HistoryModal = ({ item, token, onClose }) => {
+  const [data, setData] = useState([]);
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    axios.get(`${API_URL}/bookmarks/${item.id}/history`, { headers: { Authorization: `Bearer ${token}` } })
+      .then(res => {
+        // Format for Chart
+        const chartData = res.data.map(d => ({
+          date: new Date(d.recorded_at).toLocaleDateString(),
+          price: Number(d.price)
+        }));
+        setData(chartData);
+      })
+      .finally(() => setLoading(false));
+  }, []);
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 backdrop-blur-sm p-4 animate-in fade-in" onClick={onClose}>
+      <div className="glass-panel w-full max-w-2xl p-6 rounded-2xl relative" onClick={e => e.stopPropagation()}>
+        <button onClick={onClose} className="absolute top-4 right-4"><X size={20} className="text-slate-400 hover:text-white" /></button>
+        <h3 className="text-xl font-bold text-white mb-1">Price History</h3>
+        <p className="text-sm text-slate-400 mb-6">{item.title}</p>
+
+        {loading ? <div className="h-64 flex items-center justify-center"><Loader2 className="animate-spin text-indigo-500" /></div> : (
+          <div className="h-64 w-full">
+            {data.length > 1 ? (
+              <ResponsiveContainer width="100%" height="100%">
+                <AreaChart data={data}>
+                  <defs>
+                    <linearGradient id="colorPrice" x1="0" y1="0" x2="0" y2="1">
+                      <stop offset="5%" stopColor="#818cf8" stopOpacity={0.8}/>
+                      <stop offset="95%" stopColor="#818cf8" stopOpacity={0}/>
+                    </linearGradient>
+                  </defs>
+                  <XAxis dataKey="date" stroke="#94a3b8" fontSize={12} tickLine={false} axisLine={false} />
+                  <YAxis stroke="#94a3b8" fontSize={12} tickLine={false} axisLine={false} tickFormatter={val => `${val}`} />
+                  <Tooltip contentStyle={{ backgroundColor: '#1e293b', border: 'none', borderRadius: '8px', color: '#fff' }} />
+                  <Area type="monotone" dataKey="price" stroke="#818cf8" fillOpacity={1} fill="url(#colorPrice)" />
+                </AreaChart>
+              </ResponsiveContainer>
+            ) : (
+              <div className="flex items-center justify-center h-full text-slate-500">Not enough history yet. Check back later!</div>
+            )}
+          </div>
+        )}
       </div>
     </div>
   );
@@ -352,16 +401,12 @@ const ShareModal = ({ bookmark, token, onClose, refreshData }) => {
   const [users, setUsers] = useState([]);
   const [currentShares, setCurrentShares] = useState([]);
   const [loading, setLoading] = useState(false);
-
-  // If I am receiver, shared_by is set.
   const isReceiver = !!bookmark.shared_by;
 
   useEffect(() => {
-    // Only fetch shares list if I am the owner
     if (!isReceiver) {
       axios.get(`${API_URL}/bookmarks/${bookmark.id}/shares`, { headers: { Authorization: `Bearer ${token}` } })
-        .then(res => setCurrentShares(res.data))
-        .catch(() => {});
+        .then(res => setCurrentShares(res.data)).catch(() => {});
     }
   }, []);
 
@@ -381,8 +426,7 @@ const ShareModal = ({ bookmark, token, onClose, refreshData }) => {
     try {
       await axios.post(`${API_URL}/bookmarks/${bookmark.id}/share`, { receiverId: userId }, { headers: { Authorization: `Bearer ${token}` } });
       const res = await axios.get(`${API_URL}/bookmarks/${bookmark.id}/shares`, { headers: { Authorization: `Bearer ${token}` } });
-      setCurrentShares(res.data);
-      setQuery(''); setUsers([]);
+      setCurrentShares(res.data); setQuery(''); setUsers([]);
     } catch (e) { alert("Failed to share"); }
   };
 
@@ -397,8 +441,7 @@ const ShareModal = ({ bookmark, token, onClose, refreshData }) => {
     if (!confirm(`Stop receiving "${bookmark.title}" from @${bookmark.shared_by}?`)) return;
     try {
       await axios.delete(`${API_URL}/bookmarks/${bookmark.id}`, { headers: { Authorization: `Bearer ${token}` } });
-      refreshData();
-      onClose();
+      refreshData(); onClose();
     } catch (err) { alert("Failed to leave share"); }
   };
 
@@ -414,9 +457,7 @@ const ShareModal = ({ bookmark, token, onClose, refreshData }) => {
         {isReceiver ? (
           <div className="text-center py-4">
             <p className="text-slate-300 mb-4">Shared by <span className="text-purple-400 font-bold">@{bookmark.shared_by}</span></p>
-            <button onClick={leaveShare} className="w-full py-3 bg-red-600 hover:bg-red-500 rounded-xl text-white font-bold flex items-center justify-center gap-2">
-              <LeaveIcon size={18} /> Stop Receiving
-            </button>
+            <button onClick={leaveShare} className="w-full py-3 bg-red-600 hover:bg-red-500 rounded-xl text-white font-bold flex items-center justify-center gap-2"><LeaveIcon size={18} /> Stop Receiving</button>
           </div>
         ) : (
           <>
@@ -433,7 +474,6 @@ const ShareModal = ({ bookmark, token, onClose, refreshData }) => {
                 </div>
               </div>
             )}
-            
             <h4 className="text-xs font-bold text-slate-500 uppercase tracking-wider mb-2">Add Person</h4>
             <div className="relative mb-2">
               <Search className="absolute left-3 top-3 text-slate-500" size={18} />

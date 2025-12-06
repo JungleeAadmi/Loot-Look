@@ -2,7 +2,7 @@ const express = require('express');
 const cors = require('cors');
 const path = require('path');
 const { initDB, pool } = require('./db');
-const { scrapeBookmark, scanImageForPrice } = require('./scraper'); // Imported new function
+const { scrapeBookmark } = require('./scraper');
 const { startCronJobs } = require('./cron');
 const { authenticateToken, register, login } = require('./auth');
 
@@ -80,6 +80,19 @@ app.get('/api/bookmarks', authenticateToken, async (req, res) => {
     } catch (err) { res.status(500).json({ error: 'Failed' }); }
 });
 
+// NEW: Get History for Chart
+app.get('/api/bookmarks/:id/history', authenticateToken, async (req, res) => {
+    try {
+        const result = await pool.query(`
+            SELECT price, recorded_at 
+            FROM price_history 
+            WHERE bookmark_id = $1 
+            ORDER BY recorded_at ASC
+        `, [req.params.id]);
+        res.json(result.rows);
+    } catch (err) { res.status(500).json({ error: 'History failed' }); }
+});
+
 app.get('/api/bookmarks/:id/shares', authenticateToken, async (req, res) => {
     try {
         const result = await pool.query(`
@@ -146,7 +159,6 @@ app.post('/api/bookmarks/:id/check', authenticateToken, async (req, res) => {
     } catch (err) { res.status(500).json({ error: 'Failed' }); }
 });
 
-// NEW: Force OCR on Demand
 app.post('/api/bookmarks/:id/ocr', authenticateToken, async (req, res) => {
     try {
         const bm = await pool.query('SELECT * FROM bookmarks WHERE id = $1', [req.params.id]);
@@ -156,6 +168,7 @@ app.post('/api/bookmarks/:id/ocr', authenticateToken, async (req, res) => {
         if (!bookmark.image_url) return res.status(400).json({ error: 'No image to scan' });
 
         const publicDir = path.join(__dirname, '../public');
+        const { scanImageForPrice } = require('./scraper');
         const price = await scanImageForPrice(bookmark.image_url, publicDir);
 
         if (price) {
