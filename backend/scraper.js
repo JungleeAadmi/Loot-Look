@@ -31,8 +31,8 @@ async function scrapeBookmark(url, screenshotDir) {
                 '--disable-setuid-sandbox',
                 '--disable-dev-shm-usage',
                 '--disable-gpu',
-                '--disable-blink-features=AutomationControlled',
-                '--font-render-hinting=none' // Force faster rendering
+                '--disable-blink-features=AutomationControlled', // Critical for Bot Detection
+                '--font-render-hinting=none' 
             ]
         });
 
@@ -51,13 +51,20 @@ async function scrapeBookmark(url, screenshotDir) {
             }
         });
 
+        // STEALTH SCRIPT: Hide WebDriver property
+        await context.addInitScript(() => {
+            Object.defineProperty(navigator, 'webdriver', {
+                get: () => undefined,
+            });
+        });
+
         const page = await context.newPage();
 
         // 1. ROBUST NAVIGATION
         try {
             console.log(`   -> Navigating to ${url}...`);
             // Wait until 'domcontentloaded' first (fastest), then wait for visual paint
-            await page.goto(url, { waitUntil: 'domcontentloaded', timeout: 45000 });
+            await page.goto(url, { waitUntil: 'domcontentloaded', timeout: 60000 });
         } catch (navError) {
             console.warn(`   ⚠️ Navigation timeout/partial load. Proceeding to scrape anyway.`);
         }
@@ -78,14 +85,6 @@ async function scrapeBookmark(url, screenshotDir) {
 
         // 3. FORCE PAINT & SCROLL (Fix for blank screenshots)
         try {
-            // Wait for at least one image or heading to be visible (proof of render)
-            // Myntra specific: 'image-grid-image' or 'img'
-            await Promise.race([
-                page.waitForSelector('img', { timeout: 5000 }),
-                page.waitForSelector('h1', { timeout: 5000 }),
-                new Promise(r => setTimeout(r, 2000)) // Fallback wait
-            ]);
-
             await page.evaluate(async () => {
                 // Scroll down to force layout calculation
                 window.scrollTo(0, document.body.scrollHeight / 3);
