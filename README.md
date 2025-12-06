@@ -7,7 +7,7 @@ LootLook is a self-hosted "Smart Bookmark" manager. While it functions as a beau
 **Install:** 
 
 ```
-curl -sSL https://raw.githubusercontent.com/JungleeAadmi/Loot-Look/main/install.sh | bash
+curl -O https://raw.githubusercontent.com/JungleeAadmi/Loot-Look/main/install.sh && sudo bash install.sh
 
 ```
 **Update**
