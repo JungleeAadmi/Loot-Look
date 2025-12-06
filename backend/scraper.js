@@ -31,7 +31,8 @@ async function scrapeBookmark(url, screenshotDir) {
                 '--disable-setuid-sandbox',
                 '--disable-dev-shm-usage',
                 '--disable-gpu',
-                '--disable-blink-features=AutomationControlled' // Hide bot status
+                '--disable-blink-features=AutomationControlled',
+                '--font-render-hinting=none' // Force faster rendering
             ]
         });
 
@@ -53,10 +54,9 @@ async function scrapeBookmark(url, screenshotDir) {
         const page = await context.newPage();
 
         // 1. ROBUST NAVIGATION
-        // We wrap this in a try-catch so if the page is slow (timeout), we DON'T crash.
-        // We proceed to take a screenshot of whatever loaded.
         try {
             console.log(`   -> Navigating to ${url}...`);
+            // Wait until 'domcontentloaded' first (fastest), then wait for visual paint
             await page.goto(url, { waitUntil: 'domcontentloaded', timeout: 45000 });
         } catch (navError) {
             console.warn(`   ⚠️ Navigation timeout/partial load. Proceeding to scrape anyway.`);
@@ -76,14 +76,26 @@ async function scrapeBookmark(url, screenshotDir) {
         await safeClick('button:has-text("Allow")');
         await safeClick('[aria-label="Close"]');
 
-        // 3. Scroll Logic (Best Effort)
+        // 3. FORCE PAINT & SCROLL (Fix for blank screenshots)
         try {
+            // Wait for at least one image or heading to be visible (proof of render)
+            // Myntra specific: 'image-grid-image' or 'img'
+            await Promise.race([
+                page.waitForSelector('img', { timeout: 5000 }),
+                page.waitForSelector('h1', { timeout: 5000 }),
+                new Promise(r => setTimeout(r, 2000)) // Fallback wait
+            ]);
+
             await page.evaluate(async () => {
+                // Scroll down to force layout calculation
                 window.scrollTo(0, document.body.scrollHeight / 3);
-                await new Promise(r => setTimeout(r, 500));
+                await new Promise(r => setTimeout(r, 800));
+                // Scroll back up
                 window.scrollTo(0, 0);
+                // Force a repaint (sometimes helps headless chrome)
+                document.body.getBoundingClientRect(); 
             });
-            await page.waitForTimeout(1000); 
+            await page.waitForTimeout(1500); 
         } catch (e) {}
 
         // 4. SCREENSHOT (Guaranteed execution now)
