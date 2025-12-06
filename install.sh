@@ -1,6 +1,6 @@
 #!/bin/bash
 
-# LootLook Installer v5 (Headful Scraper Support)
+# LootLook Installer v6 (OCR Support)
 # Repo: https://github.com/JungleeAadmi/Loot-Look
 
 set -e
@@ -9,7 +9,7 @@ GREEN='\033[0;32m'
 YELLOW='\033[1;33m'
 NC='\033[0m'
 
-echo -e "${GREEN}--- STARTING LOOTLOOK INSTALLER v5 ---${NC}"
+echo -e "${GREEN}--- STARTING LOOTLOOK INSTALLER v6 ---${NC}"
 
 # 1. Root Check
 if [[ $EUID -ne 0 ]]; then
@@ -31,9 +31,9 @@ echo -e "${YELLOW}Step 2: Updating system packages...${NC}"
 export DEBIAN_FRONTEND=noninteractive
 apt-get update && apt-get upgrade -y
 
-# 4. Install Dependencies (Added xvfb for headful scraping)
+# 4. Install Dependencies (Added tesseract-ocr)
 echo -e "${YELLOW}Step 3: Installing core dependencies...${NC}"
-apt-get install -y curl git build-essential postgresql postgresql-contrib wget xvfb libx11-dev
+apt-get install -y curl git build-essential postgresql postgresql-contrib wget xvfb libx11-dev tesseract-ocr
 
 # 5. Install Node.js 20
 if ! command -v node &> /dev/null; then
@@ -125,7 +125,7 @@ cd $APP_DIR/frontend
 npm install
 npm run build
 
-# 11. System Service (Updated to use xvfb-run)
+# 11. System Service
 echo -e "${YELLOW}Restarting Service...${NC}"
 cat <<EOF > /etc/systemd/system/lootlook.service
 [Unit]
@@ -136,7 +136,6 @@ After=network.target postgresql.service
 Type=simple
 User=root
 WorkingDirectory=$APP_DIR/backend
-# CRITICAL: We run node inside a virtual X11 display
 ExecStart=/usr/bin/xvfb-run --auto-servernum --server-args='-screen 0 1280x1024x24' /usr/bin/node server.js
 Restart=on-failure
 Environment=NODE_ENV=production
