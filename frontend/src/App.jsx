@@ -2,7 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { 
   LogOut, ExternalLink, RefreshCw, ShoppingBag, Link as LinkIcon, Loader2,
   Share2, Trash2, Eye, X, Plus, Search, Copy, Download, UserMinus, LogOut as LeaveIcon,
-  ScanSearch // New Icon for OCR
+  ScanSearch 
 } from 'lucide-react';
 import axios from 'axios';
 
@@ -152,10 +152,11 @@ const Dashboard = ({ user, token, onLogout, openSnip }) => {
   };
 
   const downloadCSV = () => {
-    const headers = ["Title", "Price", "URL", "Added Date", "Last Checked"];
+    const headers = ["Title", "Price", "Currency", "URL", "Added Date", "Last Checked"];
     const rows = bookmarks.map(b => [
       `"${b.title.replace(/"/g, '""')}"`,
       b.current_price || 0,
+      b.currency || 'INR', // Export currency too
       b.url,
       formatDate(b.created_at),
       formatDate(b.last_checked)
@@ -215,12 +216,23 @@ const Dashboard = ({ user, token, onLogout, openSnip }) => {
 
 const BookmarkCard = ({ data, token, refreshData, onSnip, onShare }) => {
   const [checking, setChecking] = useState(false);
-  const [scanning, setScanning] = useState(false); // OCR Loading State
+  const [scanning, setScanning] = useState(false); 
   const [imgError, setImgError] = useState(false);
 
   useEffect(() => { setImgError(false); }, [data.image_url]);
 
-  const fmt = (p) => new Intl.NumberFormat('en-IN', { style: 'currency', currency: data.currency || 'INR', maximumFractionDigits: 0 }).format(p);
+  // DYNAMIC CURRENCY FORMATTER
+  const fmt = (p) => {
+    try {
+      return new Intl.NumberFormat('en-US', { // en-US locale handles most symbols well
+        style: 'currency', 
+        currency: data.currency || 'INR', 
+        maximumFractionDigits: 0 
+      }).format(p);
+    } catch (e) {
+      return p; // Fallback if currency code is weird
+    }
+  };
 
   const handleCheck = async () => {
     setChecking(true);
@@ -320,7 +332,6 @@ const BookmarkCard = ({ data, token, refreshData, onSnip, onShare }) => {
           <button onClick={onSnip} className="btn-icon p-2 rounded-lg flex justify-center col-span-1" title="View Screenshot"><Eye size={16} /></button>
           <button onClick={onShare} className="btn-icon p-2 rounded-lg flex justify-center col-span-1" title="Share Settings"><Share2 size={16} /></button>
           <button onClick={handleCopy} className="btn-icon p-2 rounded-lg flex justify-center col-span-1" title="Copy Link"><Copy size={16} /></button>
-          
           <a href={data.url} target="_blank" rel="noreferrer" className="btn-icon p-2 rounded-lg flex justify-center items-center col-span-2 bg-indigo-600/10 hover:bg-indigo-600/20 text-indigo-400 hover:text-indigo-300" title="Open Website">
             <ExternalLink size={16} />
           </a>

@@ -6,7 +6,28 @@ const { extractPriceFromImage } = require('./ocr');
 
 const DESKTOP_UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36';
 
-// 1. Main Scraper Function
+// Currency Symbol Map
+const CURRENCY_MAP = {
+    '$': 'USD',
+    '€': 'EUR',
+    '£': 'GBP',
+    '¥': 'JPY',
+    '₹': 'INR',
+    'Rs': 'INR',
+    'RP': 'IDR',
+    'RM': 'MYR',
+    'AED': 'AED',
+    'AUD': 'AUD',
+    'CAD': 'CAD',
+    'CHF': 'CHF',
+    'CNY': 'CNY',
+    'HKD': 'HKD',
+    'NZD': 'NZD',
+    'SEK': 'SEK',
+    'SGD': 'SGD',
+    'KRW': 'KRW'
+};
+
 async function scrapeBookmark(url, screenshotDir) {
     console.log(`🔍 [Scraper] Starting: ${url}`);
     
@@ -14,7 +35,7 @@ async function scrapeBookmark(url, screenshotDir) {
     let data = {
         title: 'New Bookmark',
         price: null,
-        currency: 'INR',
+        currency: 'INR', // Default
         imagePath: null,
         isTracked: false,
         site_name: 'Web'
@@ -32,19 +53,18 @@ async function scrapeBookmark(url, screenshotDir) {
                 '--disable-setuid-sandbox',
                 '--disable-dev-shm-usage',
                 '--disable-gpu',
-                '--window-size=1080,1920', // Matched to viewport
+                '--window-size=1080,1920',
                 '--disable-blink-features=AutomationControlled'
             ]
         });
 
         const context = await browser.newContext({
             userAgent: DESKTOP_UA,
-            viewport: { width: 1080, height: 1920 }, // 1080p Portrait Mode
+            viewport: { width: 1080, height: 1920 },
             deviceScaleFactor: 1,
             isMobile: false,
             hasTouch: false,
-            locale: 'en-IN',
-            timezoneId: 'Asia/Kolkata',
+            // Generic English to avoid auto-translation messing up prices
             extraHTTPHeaders: { 'Accept-Language': 'en-US,en;q=0.9' }
         });
 
@@ -115,11 +135,16 @@ async function scrapeBookmark(url, screenshotDir) {
 
         // Layer 2: Selectors
         if (!data.price) {
-            const selectors = ['.pdp-price strong', '.pdp-price', '.a-price-whole', 'div[class*="_30jeq3"]', 'h4:contains("₹")', '.price', '[class*="price"]'];
+            const selectors = ['.pdp-price strong', '.pdp-price', '.a-price-whole', 'div[class*="_30jeq3"]', 'h4', '.price', '[class*="price"]', '[data-testid="price"]'];
             for (const sel of selectors) {
                 const text = $(sel).first().text();
-                const p = parsePrice(text);
-                if (p) { data.price = p; break; }
+                // Parse Price AND Currency from text
+                const result = parsePriceAndCurrency(text);
+                if (result.price) { 
+                    data.price = result.price;
+                    if (result.currency) data.currency = result.currency;
+                    break; 
+                }
             }
         }
 
@@ -128,6 +153,10 @@ async function scrapeBookmark(url, screenshotDir) {
             const metaPrice = $('meta[property="product:price:amount"]').attr('content') || 
                               $('meta[property="og:price:amount"]').attr('content');
             if (metaPrice) data.price = parseFloat(metaPrice);
+            
+            const metaCurr = $('meta[property="product:price:currency"]').attr('content') ||
+                             $('meta[property="og:price:currency"]').attr('content');
+            if (metaCurr) data.currency = metaCurr;
         }
 
         if (data.price && !isNaN(data.price)) data.isTracked = true;
@@ -141,24 +170,35 @@ async function scrapeBookmark(url, screenshotDir) {
     return data;
 }
 
-// 2. On-Demand OCR Function (New Export)
+// 2. On-Demand OCR Function
 async function scanImageForPrice(imageRelativePath, publicDir) {
-    // imageRelativePath is like "/screenshots/123.jpg"
-    // publicDir is the absolute path to "backend/public"
     const fileName = path.basename(imageRelativePath);
     const absPath = path.join(publicDir, 'screenshots', fileName);
-    
     if (!fs.existsSync(absPath)) return null;
-
-    console.log(`👁️ [OCR Demand] Scanning: ${absPath}`);
     return await extractPriceFromImage(absPath);
 }
 
-function parsePrice(text) {
-    if (!text) return null;
-    const clean = text.replace(/[^0-9.]/g, '');
+// 3. Robust Parser
+function parsePriceAndCurrency(text) {
+    if (!text) return { price: null, currency: null };
+    
+    let currency = null;
+    
+    // Detect Currency Symbol
+    for (const [symbol, code] of Object.entries(CURRENCY_MAP)) {
+        if (text.includes(symbol)) {
+            currency = code;
+            break;
+        }
+    }
+
+    // Clean numbers
+    const clean = text.replace(/[^0-9.]/g, ''); 
     const num = parseFloat(clean);
-    return isNaN(num) ? null : num;
+
+    if (isNaN(num) || num < 1) return { price: null, currency: null };
+    
+    return { price: num, currency: currency };
 }
 
 module.exports = { scrapeBookmark, scanImageForPrice };
