@@ -3,6 +3,7 @@ const cheerio = require('cheerio');
 const fs = require('fs');
 const path = require('path');
 
+// Mobile User Agent (Pixel 7) - Gets better prices, fewer popups
 const MOBILE_UA = 'Mozilla/5.0 (Linux; Android 14; Pixel 7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.6099.193 Mobile Safari/537.36';
 
 async function scrapeBookmark(url, screenshotDir) {
@@ -29,7 +30,8 @@ async function scrapeBookmark(url, screenshotDir) {
                 '--no-sandbox', 
                 '--disable-setuid-sandbox',
                 '--disable-dev-shm-usage',
-                '--disable-gpu'
+                '--disable-gpu',
+                '--disable-blink-features=AutomationControlled' // Hide bot status
             ]
         });
 
@@ -40,44 +42,51 @@ async function scrapeBookmark(url, screenshotDir) {
             isMobile: true,
             hasTouch: true,
             locale: 'en-IN',
-            timezoneId: 'Asia/Kolkata'
+            timezoneId: 'Asia/Kolkata',
+            extraHTTPHeaders: {
+                'Accept-Language': 'en-US,en;q=0.9',
+                'Upgrade-Insecure-Requests': '1',
+                'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8'
+            }
         });
 
         const page = await context.newPage();
 
-        console.log(`   -> Navigating to ${url}...`);
-        await page.goto(url, { waitUntil: 'domcontentloaded', timeout: 60000 });
+        // 1. ROBUST NAVIGATION
+        // We wrap this in a try-catch so if the page is slow (timeout), we DON'T crash.
+        // We proceed to take a screenshot of whatever loaded.
+        try {
+            console.log(`   -> Navigating to ${url}...`);
+            await page.goto(url, { waitUntil: 'domcontentloaded', timeout: 45000 });
+        } catch (navError) {
+            console.warn(`   ⚠️ Navigation timeout/partial load. Proceeding to scrape anyway.`);
+        }
         
-        // Anti-Popup
+        // 2. Anti-Popup (Best Effort)
         const safeClick = async (selector) => {
             try {
                 const el = page.locator(selector).first();
-                if (await el.isVisible({ timeout: 2000 })) {
-                    await el.click({ timeout: 1000 });
-                    await page.waitForTimeout(500);
+                if (await el.isVisible({ timeout: 1000 })) {
+                    await el.click({ timeout: 500 });
                 }
             } catch (e) {}
         };
 
         await safeClick('button:has-text("Accept")');
         await safeClick('button:has-text("Allow")');
-        await safeClick('button:has-text("Confirm")');
         await safeClick('[aria-label="Close"]');
 
-        // --- SCROLL LOGIC FIX ---
-        // 1. Scroll down to trigger lazy loading images
-        await page.evaluate(async () => {
-            window.scrollTo(0, document.body.scrollHeight / 2);
-            await new Promise(r => setTimeout(r, 1000));
-            window.scrollTo(0, document.body.scrollHeight);
-        });
-        await page.waitForTimeout(2000); 
+        // 3. Scroll Logic (Best Effort)
+        try {
+            await page.evaluate(async () => {
+                window.scrollTo(0, document.body.scrollHeight / 3);
+                await new Promise(r => setTimeout(r, 500));
+                window.scrollTo(0, 0);
+            });
+            await page.waitForTimeout(1000); 
+        } catch (e) {}
 
-        // 2. Scroll back UP to top for the perfect screenshot
-        await page.evaluate(() => window.scrollTo(0, 0));
-        await page.waitForTimeout(1000); 
-        // ------------------------
-
+        // 4. SCREENSHOT (Guaranteed execution now)
         const fileName = `${Date.now()}_${Math.floor(Math.random()*1000)}.jpg`;
         const filePath = path.join(screenshotDir, fileName);
         if (!fs.existsSync(screenshotDir)) fs.mkdirSync(screenshotDir, { recursive: true });
@@ -86,14 +95,17 @@ async function scrapeBookmark(url, screenshotDir) {
         data.imagePath = `/screenshots/${fileName}`;
         console.log(`   -> Screenshot saved.`);
 
+        // 5. Parse Data
         const content = await page.content();
         const $ = cheerio.load(content);
         
-        data.title = $('meta[property="og:title"]').attr('content') || 
+        // Improved Title Extraction
+        data.title = $('h1').first().text().trim() || 
+                     $('meta[property="og:title"]').attr('content') || 
                      $('title').text().trim() || 
                      data.site_name;
 
-        // Price Layer 1: JSON-LD
+        // --- Price Layer 1: JSON-LD ---
         $('script[type="application/ld+json"]').each((i, el) => {
             try {
                 const json = JSON.parse($(el).html());
@@ -109,9 +121,19 @@ async function scrapeBookmark(url, screenshotDir) {
             } catch (e) {}
         });
 
-        // Price Layer 2: Selectors
+        // --- Price Layer 2: Visual Selectors (Updated for Myntra) ---
         if (!data.price) {
-            const selectors = ['.a-price-whole', 'div[class*="_30jeq3"]', '.pdp-price', 'h4:contains("₹")', '.price', '[class*="price"]'];
+            const selectors = [
+                '.pdp-price strong',        // Myntra Specific
+                '.pdp-price',               // Myntra Generic
+                '.a-price-whole',           // Amazon
+                'div[class*="_30jeq3"]',    // Flipkart
+                'h4:contains("₹")',         // Meesho
+                '.price', 
+                '[class*="price"]',
+                '[data-testid="price"]'
+            ];
+
             for (const sel of selectors) {
                 const text = $(sel).first().text();
                 const p = parsePrice(text);
@@ -119,9 +141,10 @@ async function scrapeBookmark(url, screenshotDir) {
             }
         }
 
-        // Price Layer 3: Meta
+        // --- Price Layer 3: Meta Tags ---
         if (!data.price) {
-            const metaPrice = $('meta[property="product:price:amount"]').attr('content');
+            const metaPrice = $('meta[property="product:price:amount"]').attr('content') || 
+                              $('meta[property="og:price:amount"]').attr('content');
             if (metaPrice) data.price = parseFloat(metaPrice);
         }
 
@@ -129,6 +152,8 @@ async function scrapeBookmark(url, screenshotDir) {
 
     } catch (error) {
         console.error(`❌ [Scraper Error] ${url}:`, error.message);
+        // Even if everything crashes, we try to return whatever data we have
+        // so the bookmark is at least saved with the URL.
     } finally {
         if (browser) await browser.close();
     }
