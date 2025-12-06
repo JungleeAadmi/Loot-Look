@@ -215,7 +215,7 @@ const Dashboard = ({ user, token, onLogout, openSnip, openHistory }) => {
 
           <button onClick={downloadCSV} className="flex items-center gap-2 px-4 py-2 hover:bg-white/5 rounded-full text-slate-400 hover:text-white transition" title="Export CSV"><Download size={18} /></button>
           <button onClick={() => fetchBookmarks(false)} className="flex items-center gap-2 px-4 py-2 hover:bg-white/5 rounded-full text-slate-400 hover:text-white transition" title="Sync Now"><RefreshCw size={18} className={syncing ? 'animate-spin' : ''} /></button>
-          <button onClick={onLogout} className="flex items-center gap-2 text-xs font-semibold text-slate-400 hover:text-white px-4 py-2 hover:bg-white/5 rounded-full border border-white/5"><LogOut size={16} /> Log Out</button>
+          <button onClick={onLogout} className="flex items-center gap-2 px-4 py-2 hover:bg-white/5 rounded-full text-slate-400 hover:text-white transition border border-white/5" title="Log Out"><LogOut size={18} /></button>
         </div>
       </nav>
 
