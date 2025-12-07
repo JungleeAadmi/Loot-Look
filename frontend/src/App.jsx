@@ -5,13 +5,11 @@ import {
   ScanSearch, Filter, Bell
 } from 'lucide-react';
 import axios from 'axios';
-import { 
-  AreaChart, Area, XAxis, YAxis, Tooltip, ResponsiveContainer, 
-  ReferenceLine, CartesianGrid, Dot 
-} from 'recharts';
+import { AreaChart, Area, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid } from 'recharts';
 
 const API_URL = '/api';
 
+// Date Formatter: Dynamic (Uses User's Local Device Time)
 const formatDate = (dateString) => {
   if (!dateString) return 'Never';
   return new Date(dateString).toLocaleString('en-IN', {
@@ -57,7 +55,7 @@ const App = () => {
   if (view === 'loading') return <div className="min-h-screen flex items-center justify-center bg-[#0f172a]"><Loader2 className="animate-spin text-indigo-500" size={48} /></div>;
 
   return (
-    <div className="min-h-screen text-slate-200 font-sans selection:bg-indigo-500/30 relative pb-20">
+    <div className="min-h-screen text-slate-200 font-sans selection:bg-indigo-500/30 relative pb-20 overflow-x-hidden">
       {view === 'login' && <AuthForm type="login" onAuth={handleLogin} onSwitch={() => setView('register')} />}
       {view === 'register' && <AuthForm type="register" onAuth={handleLogin} onSwitch={() => setView('login')} />}
       {view === 'dashboard' && user && (
@@ -71,11 +69,12 @@ const App = () => {
         />
       )}
 
+      {/* Full Screen Snip Viewer */}
       {snipImage && (
-        <div className="fixed inset-0 z-[100] flex items-center justify-center bg-black/90 backdrop-blur-md p-4 animate-in fade-in" onClick={() => setSnipImage(null)}>
-          <div className="relative h-full max-h-[90vh] flex flex-col items-center">
-            <button onClick={() => setSnipImage(null)} className="absolute -top-12 right-0 p-2 bg-white/10 rounded-full text-white"><X size={24} /></button>
-            <img src={snipImage} alt="Snip" className="h-full object-contain rounded-lg shadow-2xl" />
+        <div className="fixed inset-0 z-[100] flex items-center justify-center bg-black/95 backdrop-blur-md p-4 animate-in fade-in" onClick={() => setSnipImage(null)}>
+          <div className="relative w-full h-full max-w-lg flex flex-col items-center justify-center">
+            <button onClick={() => setSnipImage(null)} className="absolute top-4 right-4 p-3 bg-white/10 rounded-full text-white hover:bg-white/20 transition z-50"><X size={24} /></button>
+            <img src={snipImage} alt="Snip" className="max-w-full max-h-full object-contain rounded-lg shadow-2xl" />
           </div>
         </div>
       )}
@@ -192,52 +191,83 @@ const Dashboard = ({ user, token, onLogout, openSnip, openHistory, openSettings 
   const filteredBookmarks = filter === 'All' ? bookmarks : bookmarks.filter(b => (b.site_name || 'Web') === filter);
 
   return (
-    <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
-      <nav className="flex flex-col md:flex-row justify-between items-center mb-12 gap-6 glass-panel p-4 rounded-2xl md:rounded-full">
-        <div className="flex items-center gap-4 w-full md:w-auto">
-          <div className="bg-indigo-600/90 p-2.5 rounded-full"><ShoppingBag size={24} className="text-white" /></div>
-          <div><h1 className="text-xl font-bold text-white">LootLook</h1><p className="text-xs text-indigo-300">@{user.username}</p></div>
+    <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-4 sm:py-8">
+      
+      {/* RESPONSIVE NAVBAR */}
+      <nav className="flex flex-col xl:flex-row justify-between items-center mb-8 gap-4 glass-panel p-4 rounded-3xl">
+        
+        {/* Logo Section */}
+        <div className="flex items-center gap-3 w-full xl:w-auto justify-center xl:justify-start">
+          <div className="bg-indigo-600/90 p-2.5 rounded-full shadow-lg shadow-indigo-600/30">
+            <ShoppingBag size={24} className="text-white" />
+          </div>
+          <div className="text-left">
+            <h1 className="text-xl font-bold text-white leading-none">LootLook</h1>
+            <p className="text-[10px] text-indigo-300 font-medium">@{user.username}</p>
+          </div>
         </div>
         
-        <form onSubmit={handleAdd} className="relative group w-full md:w-[500px]">
-          <div className="absolute left-4 top-1/2 -translate-y-1/2 text-slate-400">{adding ? <Loader2 className="animate-spin" size={18} /> : <Plus size={18} />}</div>
-          <input type="url" placeholder="Paste link to track..." className="w-full pl-12 pr-28 py-3 rounded-xl bg-slate-900/50 border border-white/10 text-white focus:outline-none focus:ring-2 focus:ring-indigo-500/50" value={newUrl} onChange={(e) => setNewUrl(e.target.value)} required disabled={adding} />
-          <button type="submit" disabled={adding} className="absolute right-1.5 top-1.5 bottom-1.5 px-4 rounded-lg bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-bold shadow-md">Add</button>
+        {/* Add Link Bar - Responsive width */}
+        <form onSubmit={handleAdd} className="relative group w-full xl:max-w-lg xl:mx-4">
+          <div className="absolute left-4 top-1/2 -translate-y-1/2 text-slate-400">
+            {adding ? <Loader2 className="animate-spin" size={18} /> : <Plus size={18} />}
+          </div>
+          <input 
+            type="url" 
+            placeholder="Paste link to track..." 
+            className="w-full pl-12 pr-20 py-3 rounded-xl bg-slate-900/50 border border-white/10 text-white focus:outline-none focus:ring-2 focus:ring-indigo-500/50 text-sm placeholder:text-slate-500" 
+            value={newUrl} 
+            onChange={(e) => setNewUrl(e.target.value)} 
+            required 
+            disabled={adding} 
+          />
+          <button 
+            type="submit" 
+            disabled={adding} 
+            className="absolute right-1.5 top-1.5 bottom-1.5 px-3 rounded-lg bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-bold shadow-md transition-all"
+          >
+            Add
+          </button>
         </form>
         
-        <div className="w-full md:w-auto flex justify-end gap-2 items-center">
+        {/* Controls Grid - Wraps safely on mobile */}
+        <div className="flex flex-wrap justify-center xl:justify-end gap-2 w-full xl:w-auto">
           
-          <div className="relative">
+          {/* Filter Dropdown */}
+          <div className="relative flex-grow sm:flex-grow-0">
             <select 
               value={filter} 
               onChange={(e) => setFilter(e.target.value)}
-              className="appearance-none bg-white/5 border border-white/10 text-slate-300 text-xs font-semibold rounded-full pl-4 pr-8 py-2 hover:bg-white/10 focus:outline-none cursor-pointer"
+              className="w-full sm:w-auto appearance-none bg-white/5 border border-white/10 text-slate-300 text-xs font-semibold rounded-xl pl-3 pr-7 py-2.5 hover:bg-white/10 focus:outline-none cursor-pointer"
             >
               {sites.map(site => <option key={site} value={site} className="bg-slate-800 text-white">{site}</option>)}
             </select>
-            <Filter size={14} className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 pointer-events-none" />
+            <Filter size={12} className="absolute right-2.5 top-1/2 -translate-y-1/2 text-slate-400 pointer-events-none" />
           </div>
 
-          <button onClick={downloadCSV} className="flex items-center gap-2 px-4 py-2 hover:bg-white/5 rounded-full text-slate-400 hover:text-white transition" title="Export CSV">
-            <Download size={18} />
-          </button>
+          <div className="flex gap-2">
+            <button onClick={downloadCSV} className="btn-icon p-2.5 rounded-xl hover:bg-white/10 transition" title="Export CSV">
+              <Download size={18} className="text-slate-300" />
+            </button>
 
-          <button onClick={() => fetchBookmarks(false)} className="flex items-center gap-2 px-4 py-2 hover:bg-white/5 rounded-full text-slate-400 hover:text-white transition" title="Sync Now">
-            <RefreshCw size={18} className={syncing ? 'animate-spin' : ''} />
-          </button>
-          
-          <button onClick={openSettings} className="flex items-center gap-2 px-4 py-2 hover:bg-white/5 rounded-full text-slate-400 hover:text-white transition" title="Settings">
-            <Bell size={18} />
-          </button>
+            <button onClick={() => fetchBookmarks(false)} className="btn-icon p-2.5 rounded-xl hover:bg-white/10 transition" title="Sync Now">
+              <RefreshCw size={18} className={`text-slate-300 ${syncing ? 'animate-spin' : ''}`} />
+            </button>
+            
+            <button onClick={openSettings} className="btn-icon p-2.5 rounded-xl hover:bg-white/10 transition" title="Settings">
+              <Bell size={18} className="text-slate-300" />
+            </button>
 
-          <button onClick={onLogout} className="flex items-center gap-2 px-4 py-2 hover:bg-white/5 rounded-full text-slate-400 hover:text-white transition border border-white/5" title="Log Out">
-            <LogOut size={18} />
-          </button>
+            <button onClick={onLogout} className="btn-icon p-2.5 rounded-xl hover:bg-red-500/20 text-slate-300 hover:text-red-400 transition border border-white/5" title="Log Out">
+              <LogOut size={18} />
+            </button>
+          </div>
         </div>
       </nav>
 
+      {/* Grid Content */}
       {loading ? (
-        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-6">{[1,2,3,4].map(i => <div key={i} className="h-80 rounded-2xl bg-white/5 animate-pulse"></div>)}</div>
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-6">{[1,2,3,4].map(i => <div key={i} className="h-80 rounded-2xl bg-white/5 animate-pulse border border-white/5"></div>)}</div>
       ) : (
         <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-6">
           {filteredBookmarks.map(bm => (
@@ -319,16 +349,16 @@ const BookmarkCard = ({ data, token, refreshData, onSnip, onShare, onHistory }) 
 
   return (
     <div className="glass-card rounded-2xl flex flex-col h-full group">
-      <div className="h-64 relative overflow-hidden bg-slate-900/50 cursor-pointer" onClick={onSnip}>
+      <div className="h-48 sm:h-56 relative overflow-hidden bg-slate-900/50 cursor-pointer" onClick={onSnip}>
         {data.image_url && !imgError ? (
           <img src={data.image_url} alt={data.title} className="w-full h-full object-cover group-hover:scale-105 transition duration-700" onError={() => setImgError(true)} />
         ) : (
           <div className="absolute inset-0 flex items-center justify-center bg-slate-800"><ShoppingBag size={32} className="text-slate-600" /></div>
         )}
         
-        <div className="absolute top-3 left-3 right-3 flex justify-between">
-          <div className="flex gap-1 flex-wrap">
-            {data.is_tracked && <span className="bg-emerald-500/90 text-white text-[10px] font-bold px-2 py-1 rounded shadow">TRACKING</span>}
+        <div className="absolute top-3 left-3 right-3 flex justify-between pointer-events-none">
+          <div className="flex gap-1 flex-wrap pointer-events-auto">
+            {data.is_tracked && <span className="bg-emerald-500/90 text-white text-[10px] font-bold px-2 py-1 rounded shadow backdrop-blur-md">TRACKING</span>}
             {data.shared_by && (
               <button onClick={(e) => {e.stopPropagation(); onShare();}} className="bg-purple-500/90 hover:bg-purple-600 text-white text-[10px] font-bold px-2 py-1 rounded shadow transition">
                 FROM @{data.shared_by}
@@ -343,13 +373,16 @@ const BookmarkCard = ({ data, token, refreshData, onSnip, onShare, onHistory }) 
         </div>
       </div>
 
-      <div className="p-5 flex flex-col flex-grow">
-        <h3 className="text-sm font-medium text-slate-200 line-clamp-2 h-10 mb-4 leading-snug" title={data.title}>{data.title}</h3>
+      <div className="p-4 sm:p-5 flex flex-col flex-grow">
+        <h3 className="text-sm font-medium text-slate-200 line-clamp-2 h-10 mb-3 leading-snug" title={data.title}>{data.title}</h3>
         <div className="mt-auto mb-4">
           {data.is_tracked ? (
-            <div onClick={onHistory} className="cursor-pointer hover:opacity-80 transition">
+            <div onClick={onHistory} className="cursor-pointer hover:opacity-80 transition group/price">
               {data.previous_price && (<span className="text-xs text-slate-500 line-through mr-2">{fmt(data.previous_price)}</span>)}
-              <div className={`text-2xl font-bold ${priceColor} tracking-tight`}>{fmt(data.current_price)}</div>
+              <div className={`text-xl sm:text-2xl font-bold ${priceColor} tracking-tight flex items-center gap-2`}>
+                {fmt(data.current_price)}
+                <AreaChart size={14} className="text-slate-600 group-hover/price:text-indigo-400 transition-colors opacity-0 group-hover/price:opacity-100" />
+              </div>
             </div>
           ) : (
             <span className="text-sm font-medium text-slate-400">Bookmark</span>
@@ -360,26 +393,24 @@ const BookmarkCard = ({ data, token, refreshData, onSnip, onShare, onHistory }) 
           <div className="flex justify-between"><span>Added:</span> <span className="font-mono text-slate-400">{formatDate(data.created_at)}</span></div>
         </div>
         <div className="grid grid-cols-4 gap-2">
-          <button onClick={(e) => {e.stopPropagation(); handleCheck()}} className="btn-icon p-2 rounded-lg flex justify-center col-span-1" title="Refresh Price">
+          <button onClick={(e) => {e.stopPropagation(); handleCheck()}} className="btn-icon p-2 rounded-lg flex justify-center col-span-1 bg-slate-800/50 hover:bg-indigo-500/20 hover:text-indigo-400 transition" title="Refresh Price">
             <RefreshCw size={16} className={checking ? 'animate-spin text-indigo-400' : ''} />
           </button>
-          <button onClick={onSnip} className="btn-icon p-2 rounded-lg flex justify-center col-span-1" title="View Screenshot"><Eye size={16} /></button>
-          <button onClick={onShare} className="btn-icon p-2 rounded-lg flex justify-center col-span-1" title="Share Settings"><Share2 size={16} /></button>
-          <button onClick={handleCopy} className="btn-icon p-2 rounded-lg flex justify-center col-span-1" title="Copy Link"><Copy size={16} /></button>
-          <a href={data.url} target="_blank" rel="noreferrer" className="btn-icon p-2 rounded-lg flex justify-center items-center col-span-2 bg-indigo-600/10 hover:bg-indigo-600/20 text-indigo-400 hover:text-indigo-300" title="Open Website">
+          <button onClick={onSnip} className="btn-icon p-2 rounded-lg flex justify-center col-span-1 bg-slate-800/50 hover:bg-slate-700 transition" title="View Screenshot"><Eye size={16} /></button>
+          <button onClick={onShare} className="btn-icon p-2 rounded-lg flex justify-center col-span-1 bg-slate-800/50 hover:bg-slate-700 transition" title="Share Settings"><Share2 size={16} /></button>
+          <button onClick={handleCopy} className="btn-icon p-2 rounded-lg flex justify-center col-span-1 bg-slate-800/50 hover:bg-slate-700 transition" title="Copy Link"><Copy size={16} /></button>
+          
+          <a href={data.url} target="_blank" rel="noreferrer" className="btn-icon p-2 rounded-lg flex justify-center items-center col-span-2 bg-indigo-500/10 hover:bg-indigo-500/20 text-indigo-400 hover:text-indigo-300 transition border border-indigo-500/10" title="Open Website">
             <ExternalLink size={16} />
           </a>
-          <button onClick={(e) => {e.stopPropagation(); handleOCR()}} className="btn-icon p-2 rounded-lg flex justify-center col-span-1 bg-teal-500/10 hover:bg-teal-500/20 text-teal-400" title="Scan Price"><ScanSearch size={16} className={scanning ? 'animate-pulse' : ''} /></button>
-          <button onClick={(e) => {e.stopPropagation(); handleDelete()}} className="p-2 rounded-lg bg-red-500/10 hover:bg-red-600 text-red-500 hover:text-white transition flex justify-center col-span-1" title="Delete">
-            <Trash2 size={16} />
-          </button>
+          <button onClick={(e) => {e.stopPropagation(); handleOCR()}} className="btn-icon p-2 rounded-lg flex justify-center col-span-1 bg-teal-500/10 hover:bg-teal-500/20 text-teal-400 transition border border-teal-500/10" title="Scan Price"><ScanSearch size={16} className={scanning ? 'animate-pulse' : ''} /></button>
+          <button onClick={(e) => {e.stopPropagation(); handleDelete()}} className="p-2 rounded-lg bg-red-500/10 hover:bg-red-500/20 text-red-500 hover:text-red-400 transition flex justify-center col-span-1 border border-red-500/10" title="Delete"><Trash2 size={16} /></button>
         </div>
       </div>
     </div>
   );
 };
 
-// --- NEW HISTORY MODAL WITH MIN/MAX ---
 const HistoryModal = ({ item, token, onClose }) => {
   const [data, setData] = useState([]);
   const [stats, setStats] = useState({ min: null, max: null, minDate: '', maxDate: '' });
@@ -389,8 +420,6 @@ const HistoryModal = ({ item, token, onClose }) => {
     axios.get(`${API_URL}/bookmarks/${item.id}/history`, { headers: { Authorization: `Bearer ${token}` } })
       .then(res => {
         if (res.data.length === 0) return;
-
-        // Process Data
         let min = Infinity, max = -Infinity;
         let minDate = '', maxDate = '';
         
@@ -419,8 +448,6 @@ const HistoryModal = ({ item, token, onClose }) => {
 
         {loading ? <div className="h-80 flex items-center justify-center"><Loader2 className="animate-spin text-indigo-500" /></div> : (
           <div className="space-y-6">
-            
-            {/* Stats Cards */}
             {data.length > 0 && (
               <div className="grid grid-cols-2 gap-4">
                 <div className="bg-emerald-500/10 border border-emerald-500/20 p-4 rounded-xl">
@@ -435,8 +462,6 @@ const HistoryModal = ({ item, token, onClose }) => {
                 </div>
               </div>
             )}
-
-            {/* Chart */}
             <div className="h-64 w-full">
               {data.length > 1 ? (
                 <ResponsiveContainer width="100%" height="100%">
@@ -588,8 +613,8 @@ const SettingsModal = ({ token, onClose }) => {
         notifyEnabled: res.data.notify_enabled || false,
         notifySync: res.data.notify_on_sync_complete || false,
         notifyIncrease: res.data.notify_on_price_increase || false,
-        notifyDrop: res.data.notify_on_price_drop !== false, // default true
-        notifyShare: res.data.notify_on_share !== false     // default true
+        notifyDrop: res.data.notify_on_price_drop !== false,
+        notifyShare: res.data.notify_on_share !== false
       }))
       .catch(() => {});
   }, []);
