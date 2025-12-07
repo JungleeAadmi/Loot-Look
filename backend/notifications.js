@@ -1,48 +1,45 @@
 const axios = require('axios');
 
 // Helper to clean strings for HTTP headers
-// Headers cannot contain newlines or certain non-ASCII chars depending on the node version
 function cleanHeader(str) {
     if (!str) return "";
-    
-    // 1. Remove newlines
     let clean = str.replace(/[\r\n]+/g, " ");
-    
-    // 2. Remove non-ASCII characters (Emojis, smart quotes, etc)
-    // This regex keeps only standard printable ASCII characters (codes 32-126)
     clean = clean.replace(/[^\x20-\x7E]/g, "");
-
     return clean.trim();
 }
 
-// Send a push notification via Ntfy
 async function sendNotification(userSettings, title, message, clickUrl) {
-    // Safety check: ensure settings exist
     if (!userSettings || !userSettings.notify_enabled || !userSettings.ntfy_url || !userSettings.ntfy_topic) {
         return; 
     }
 
-    // Clean URL (remove trailing slash if user added one)
     const baseUrl = userSettings.ntfy_url.replace(/\/$/, '');
     const targetUrl = `${baseUrl}/${userSettings.ntfy_topic}`;
-    
-    // Sanitize Inputs
     const safeTitle = cleanHeader(title);
 
+    console.log(`🔔 [Ntfy Debug] POSTing to: ${targetUrl}`);
+
     try {
-        await axios.post(targetUrl, message, {
+        // CHANGE: Send 'message' as the raw data body, not a JSON object
+        await axios({
+            method: 'post',
+            url: targetUrl,
+            data: message, // Raw string
             headers: {
                 'Title': safeTitle, 
                 'Click': clickUrl,
                 'Tags': 'moneybag,chart_with_downwards_trend',
-                'Priority': 'default'
+                'Priority': 'default',
+                'Content-Type': 'text/plain' // Explicitly say it's text
             }
         });
-        console.log(`🔔 Notification sent to ${userSettings.ntfy_topic}`);
+        console.log(`✅ Notification sent to ${userSettings.ntfy_topic}`);
     } catch (error) {
-        console.error(`❌ Failed to send notification: ${error.message}`);
+        console.error(`❌ Failed to send notification to ${targetUrl}`);
+        console.error(`   Error: ${error.message}`);
         if (error.response) {
-            console.error(`   -> Server responded: ${error.response.status} ${JSON.stringify(error.response.data)}`);
+            const bodyPreview = JSON.stringify(error.response.data).substring(0, 200);
+            console.error(`   Server Response (${error.response.status}): ${bodyPreview}`);
         }
     }
 }
