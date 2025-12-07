@@ -11,7 +11,6 @@ const initDB = async () => {
     try {
         console.log('📦 Initializing Database...');
         
-        // 1. Users Table
         await client.query(`
             CREATE TABLE IF NOT EXISTS users (
                 id SERIAL PRIMARY KEY,
@@ -21,7 +20,16 @@ const initDB = async () => {
             );
         `);
 
-        // 2. Bookmarks Table
+        // --- NOTIFICATION MIGRATION ---
+        await client.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS ntfy_url TEXT;`);
+        await client.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS ntfy_topic TEXT;`);
+        await client.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS notify_enabled BOOLEAN DEFAULT FALSE;`);
+        
+        // NEW: Granular Controls
+        await client.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS notify_on_sync_complete BOOLEAN DEFAULT FALSE;`);
+        await client.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS notify_on_price_increase BOOLEAN DEFAULT FALSE;`);
+        // ------------------------------
+
         await client.query(`
             CREATE TABLE IF NOT EXISTS bookmarks (
                 id SERIAL PRIMARY KEY,
@@ -39,13 +47,9 @@ const initDB = async () => {
             );
         `);
 
-        // --- AUTO-MIGRATION (Fixes "Column does not exist" error) ---
-        // This ensures old databases get the new columns without needing a reinstall
         await client.query(`ALTER TABLE bookmarks ADD COLUMN IF NOT EXISTS site_name TEXT;`);
         await client.query(`ALTER TABLE bookmarks ADD COLUMN IF NOT EXISTS previous_price NUMERIC(12, 2);`);
-        // ------------------------------------------------------------
 
-        // 3. Price History
         await client.query(`
             CREATE TABLE IF NOT EXISTS price_history (
                 id SERIAL PRIMARY KEY,
@@ -55,7 +59,6 @@ const initDB = async () => {
             );
         `);
 
-        // 4. Shared Bookmarks (New feature)
         await client.query(`
             CREATE TABLE IF NOT EXISTS shared_bookmarks (
                 id SERIAL PRIMARY KEY,

@@ -2,8 +2,9 @@ const express = require('express');
 const cors = require('cors');
 const path = require('path');
 const { initDB, pool } = require('./db');
-const { scrapeBookmark } = require('./scraper');
+const { scrapeBookmark, scanImageForPrice } = require('./scraper');
 const { startCronJobs } = require('./cron');
+const { sendNotification } = require('./notifications'); // Import
 const { authenticateToken, register, login } = require('./auth');
 
 const app = express();
@@ -22,6 +23,44 @@ app.use('/screenshots', express.static(path.join(__dirname, '../public/screensho
 app.post('/api/auth/register', register);
 app.post('/api/auth/login', login);
 
+// --- SETTINGS ---
+app.get('/api/user/settings', authenticateToken, async (req, res) => {
+    try {
+        const result = await pool.query(`
+            SELECT ntfy_url, ntfy_topic, notify_enabled, 
+                   notify_on_sync_complete, notify_on_price_increase 
+            FROM users WHERE id = $1
+        `, [req.user.id]);
+        res.json(result.rows[0]);
+    } catch (err) { res.status(500).json({ error: 'Failed to load settings' }); }
+});
+
+app.put('/api/user/settings', authenticateToken, async (req, res) => {
+    const { ntfyUrl, ntfyTopic, notifyEnabled, notifySync, notifyIncrease } = req.body;
+    try {
+        await pool.query(`
+            UPDATE users SET 
+                ntfy_url = $1, 
+                ntfy_topic = $2, 
+                notify_enabled = $3,
+                notify_on_sync_complete = $4,
+                notify_on_price_increase = $5
+            WHERE id = $6
+        `, [ntfyUrl, ntfyTopic, notifyEnabled, notifySync, notifyIncrease, req.user.id]);
+        res.json({ message: 'Settings saved' });
+    } catch (err) { res.status(500).json({ error: 'Failed to save' }); }
+});
+
+app.post('/api/user/test-notify', authenticateToken, async (req, res) => {
+    const { ntfyUrl, ntfyTopic } = req.body;
+    try {
+        const fakeSettings = { ntfy_url: ntfyUrl, ntfy_topic: ntfyTopic, notify_enabled: true };
+        await sendNotification(fakeSettings, 'LootLook Test', 'This is a test alert from your LootLook server! 🚀', 'https://google.com');
+        res.json({ message: 'Sent' });
+    } catch (err) { res.status(500).json({ error: 'Failed' }); }
+});
+
+// --- USERS & BOOKMARKS ---
 app.get('/api/users/search', authenticateToken, async (req, res) => {
     const { q } = req.query;
     try {
@@ -33,16 +72,12 @@ app.get('/api/users/search', authenticateToken, async (req, res) => {
     } catch (err) { res.status(500).json({ error: 'Search failed' }); }
 });
 
-// --- BOOKMARKS ---
-
 app.post('/api/bookmarks', authenticateToken, async (req, res) => {
     const { url } = req.body;
-    console.log(`📝 [API] Request to add: ${url}`);
     try {
         const screenshotDir = path.join(__dirname, '../public/screenshots');
         const data = await scrapeBookmark(url, screenshotDir);
-        console.log(`   -> Scrape result: ${data.title}`);
-
+        
         const result = await pool.query(`
             INSERT INTO bookmarks (user_id, url, title, image_url, site_name, is_tracked, current_price, currency, created_at)
             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, NOW())
@@ -53,10 +88,7 @@ app.post('/api/bookmarks', authenticateToken, async (req, res) => {
             await pool.query(`INSERT INTO price_history (bookmark_id, price) VALUES ($1, $2)`, [result.rows[0].id, data.price]);
         }
         res.json(result.rows[0]);
-    } catch (err) { 
-        console.error("❌ [API Error] Add failed:", err);
-        res.status(500).json({ error: 'Failed to add link.' }); 
-    }
+    } catch (err) { res.status(500).json({ error: 'Failed to add link' }); }
 });
 
 app.get('/api/bookmarks', authenticateToken, async (req, res) => {
@@ -80,53 +112,62 @@ app.get('/api/bookmarks', authenticateToken, async (req, res) => {
     } catch (err) { res.status(500).json({ error: 'Failed' }); }
 });
 
-// NEW: Get History for Chart
+app.get('/api/bookmarks/:id/shares', authenticateToken, async (req, res) => {
+    try {
+        const result = await pool.query(`SELECT u.id, u.username FROM shared_bookmarks sb JOIN users u ON sb.receiver_id = u.id WHERE sb.bookmark_id = $1 AND sb.sender_id = $2`, [req.params.id, req.user.id]);
+        res.json(result.rows);
+    } catch (err) { res.status(500).json({ error: 'Failed' }); }
+});
+
 app.get('/api/bookmarks/:id/history', authenticateToken, async (req, res) => {
     try {
-        const result = await pool.query(`
-            SELECT price, recorded_at 
-            FROM price_history 
-            WHERE bookmark_id = $1 
-            ORDER BY recorded_at ASC
-        `, [req.params.id]);
+        const result = await pool.query(`SELECT price, recorded_at FROM price_history WHERE bookmark_id = $1 ORDER BY recorded_at ASC`, [req.params.id]);
         res.json(result.rows);
     } catch (err) { res.status(500).json({ error: 'History failed' }); }
 });
 
-app.get('/api/bookmarks/:id/shares', authenticateToken, async (req, res) => {
-    try {
-        const result = await pool.query(`
-            SELECT u.id, u.username 
-            FROM shared_bookmarks sb
-            JOIN users u ON sb.receiver_id = u.id
-            WHERE sb.bookmark_id = $1 AND sb.sender_id = $2
-        `, [req.params.id, req.user.id]);
-        res.json(result.rows);
-    } catch (err) { res.status(500).json({ error: 'Failed to fetch shares' }); }
-});
-
+// --- SHARE BOOKMARK (UPDATED WITH NOTIFICATION) ---
 app.post('/api/bookmarks/:id/share', authenticateToken, async (req, res) => {
     const { receiverId } = req.body;
     try {
+        // 1. Validate ownership
         const check = await pool.query('SELECT * FROM bookmarks WHERE id = $1 AND user_id = $2', [req.params.id, req.user.id]);
         if (check.rows.length === 0) return res.status(403).json({ error: 'Unauthorized' });
+        
+        const bookmark = check.rows[0];
 
+        // 2. Add share record
         await pool.query(
             'INSERT INTO shared_bookmarks (bookmark_id, sender_id, receiver_id) VALUES ($1, $2, $3) ON CONFLICT DO NOTHING',
             [req.params.id, req.user.id, receiverId]
         );
+
+        // 3. Notify Receiver
+        // Fetch receiver's ntfy settings
+        const receiverRes = await pool.query('SELECT ntfy_url, ntfy_topic, notify_enabled FROM users WHERE id = $1', [receiverId]);
+        const receiver = receiverRes.rows[0];
+
+        if (receiver) {
+            await sendNotification(
+                receiver,
+                `New Shared Item 🎁`,
+                `@${req.user.username} shared "${bookmark.title}" with you!`,
+                '' // Could link to app if you had a public URL
+            );
+        }
+
         res.json({ message: 'Shared successfully' });
-    } catch (err) { res.status(500).json({ error: 'Share failed' }); }
+    } catch (err) { 
+        console.error(err);
+        res.status(500).json({ error: 'Share failed' }); 
+    }
 });
 
 app.post('/api/bookmarks/:id/unshare', authenticateToken, async (req, res) => {
     const { receiverId } = req.body;
     try {
-        await pool.query(
-            'DELETE FROM shared_bookmarks WHERE bookmark_id = $1 AND sender_id = $2 AND receiver_id = $3',
-            [req.params.id, req.user.id, receiverId]
-        );
-        res.json({ message: 'Unshared successfully' });
+        await pool.query('DELETE FROM shared_bookmarks WHERE bookmark_id = $1 AND sender_id = $2 AND receiver_id = $3', [req.params.id, req.user.id, receiverId]);
+        res.json({ message: 'Unshared' });
     } catch (err) { res.status(500).json({ error: 'Unshare failed' }); }
 });
 
@@ -134,26 +175,14 @@ app.post('/api/bookmarks/:id/check', authenticateToken, async (req, res) => {
     try {
         const bm = await pool.query('SELECT * FROM bookmarks WHERE id = $1', [req.params.id]);
         if (bm.rows.length === 0) return res.status(404).send('Not found');
-
         const screenshotDir = path.join(__dirname, '../public/screenshots');
         const data = await scrapeBookmark(bm.rows[0].url, screenshotDir);
-
         if (data.price) {
             const oldPrice = parseFloat(bm.rows[0].current_price || 0);
-            await pool.query(`
-                UPDATE bookmarks 
-                SET current_price = $1, previous_price = $2, 
-                    title = $3, image_url = $4, last_checked = NOW() 
-                WHERE id = $5
-            `, [data.price, oldPrice, data.title, data.imagePath, req.params.id]);
-            
+            await pool.query(`UPDATE bookmarks SET current_price = $1, previous_price = $2, title = $3, image_url = $4, last_checked = NOW() WHERE id = $5`, [data.price, oldPrice, data.title, data.imagePath, req.params.id]);
             await pool.query('INSERT INTO price_history (bookmark_id, price) VALUES ($1, $2)', [req.params.id, data.price]);
         } else {
-            await pool.query(`
-                UPDATE bookmarks 
-                SET title = $1, image_url = $2, last_checked = NOW() 
-                WHERE id = $3
-            `, [data.title, data.imagePath, req.params.id]);
+            await pool.query(`UPDATE bookmarks SET title = $1, image_url = $2, last_checked = NOW() WHERE id = $3`, [data.title, data.imagePath, req.params.id]);
         }
         res.json({ message: 'Updated', price: data.price });
     } catch (err) { res.status(500).json({ error: 'Failed' }); }
@@ -163,23 +192,15 @@ app.post('/api/bookmarks/:id/ocr', authenticateToken, async (req, res) => {
     try {
         const bm = await pool.query('SELECT * FROM bookmarks WHERE id = $1', [req.params.id]);
         if (bm.rows.length === 0) return res.status(404).send('Not found');
-
         const bookmark = bm.rows[0];
-        if (!bookmark.image_url) return res.status(400).json({ error: 'No image to scan' });
-
-        const publicDir = path.join(__dirname, '../public');
+        if (!bookmark.image_url) return res.status(400).json({ error: 'No image' });
         const { scanImageForPrice } = require('./scraper');
-        const price = await scanImageForPrice(bookmark.image_url, publicDir);
-
+        const price = await scanImageForPrice(bookmark.image_url, path.join(__dirname, '../public'));
         if (price) {
-            await pool.query(`
-                UPDATE bookmarks SET current_price = $1, is_tracked = TRUE WHERE id = $2
-            `, [price, req.params.id]);
+            await pool.query(`UPDATE bookmarks SET current_price = $1, is_tracked = TRUE WHERE id = $2`, [price, req.params.id]);
             await pool.query('INSERT INTO price_history (bookmark_id, price) VALUES ($1, $2)', [req.params.id, price]);
-            res.json({ message: 'Price found via OCR', price });
-        } else {
-            res.json({ message: 'No price found in image', price: null });
-        }
+            res.json({ message: 'Price found', price });
+        } else { res.json({ message: 'No price found', price: null }); }
     } catch (err) { res.status(500).json({ error: 'OCR Failed' }); }
 });
 
@@ -188,7 +209,7 @@ app.delete('/api/bookmarks/:id', authenticateToken, async (req, res) => {
         const result = await pool.query('DELETE FROM bookmarks WHERE id = $1 AND user_id = $2 RETURNING *', [req.params.id, req.user.id]);
         if (result.rows.length === 0) {
             const sharedResult = await pool.query('DELETE FROM shared_bookmarks WHERE bookmark_id = $1 AND receiver_id = $2 RETURNING *', [req.params.id, req.user.id]);
-            if (sharedResult.rows.length === 0) return res.status(404).json({ error: 'Not found or unauthorized' });
+            if (sharedResult.rows.length === 0) return res.status(404).json({ error: 'Not found' });
         }
         res.json({ message: 'Deleted' });
     } catch (err) { res.status(500).json({ error: 'Delete failed' }); }
@@ -197,5 +218,4 @@ app.delete('/api/bookmarks/:id', authenticateToken, async (req, res) => {
 const distPath = path.join(__dirname, '../frontend/dist');
 app.use(express.static(distPath));
 app.get('*', (req, res) => res.sendFile(path.join(distPath, 'index.html')));
-
 app.listen(PORT, '0.0.0.0', () => console.log(`🚀 LootLook running on ${PORT}`));
