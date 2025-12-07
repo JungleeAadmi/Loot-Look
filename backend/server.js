@@ -23,12 +23,13 @@ app.use('/screenshots', express.static(path.join(__dirname, '../public/screensho
 app.post('/api/auth/register', register);
 app.post('/api/auth/login', login);
 
-// --- SETTINGS ---
+// --- SETTINGS (UPDATED) ---
 app.get('/api/user/settings', authenticateToken, async (req, res) => {
     try {
         const result = await pool.query(`
             SELECT ntfy_url, ntfy_topic, notify_enabled, 
-                   notify_on_sync_complete, notify_on_price_increase 
+                   notify_on_sync_complete, notify_on_price_increase,
+                   notify_on_price_drop, notify_on_share
             FROM users WHERE id = $1
         `, [req.user.id]);
         res.json(result.rows[0]);
@@ -36,7 +37,11 @@ app.get('/api/user/settings', authenticateToken, async (req, res) => {
 });
 
 app.put('/api/user/settings', authenticateToken, async (req, res) => {
-    const { ntfyUrl, ntfyTopic, notifyEnabled, notifySync, notifyIncrease } = req.body;
+    const { 
+        ntfyUrl, ntfyTopic, notifyEnabled, 
+        notifySync, notifyIncrease, notifyDrop, notifyShare 
+    } = req.body;
+    
     try {
         await pool.query(`
             UPDATE users SET 
@@ -44,9 +49,11 @@ app.put('/api/user/settings', authenticateToken, async (req, res) => {
                 ntfy_topic = $2, 
                 notify_enabled = $3,
                 notify_on_sync_complete = $4,
-                notify_on_price_increase = $5
-            WHERE id = $6
-        `, [ntfyUrl, ntfyTopic, notifyEnabled, notifySync, notifyIncrease, req.user.id]);
+                notify_on_price_increase = $5,
+                notify_on_price_drop = $6,
+                notify_on_share = $7
+            WHERE id = $8
+        `, [ntfyUrl, ntfyTopic, notifyEnabled, notifySync, notifyIncrease, notifyDrop, notifyShare, req.user.id]);
         res.json({ message: 'Settings saved' });
     } catch (err) { res.status(500).json({ error: 'Failed to save' }); }
 });
@@ -139,10 +146,12 @@ app.post('/api/bookmarks/:id/share', authenticateToken, async (req, res) => {
             [req.params.id, req.user.id, receiverId]
         );
 
-        // Notify Receiver
-        const receiverRes = await pool.query('SELECT ntfy_url, ntfy_topic, notify_enabled FROM users WHERE id = $1', [receiverId]);
+        // Notify Receiver (Updated Logic)
+        const receiverRes = await pool.query('SELECT ntfy_url, ntfy_topic, notify_enabled, notify_on_share FROM users WHERE id = $1', [receiverId]);
         const receiver = receiverRes.rows[0];
-        if (receiver) {
+        
+        // Only notify if enabled AND notify_on_share is true
+        if (receiver && receiver.notify_on_share) {
             await sendNotification(
                 receiver,
                 `New Shared Item 🎁`,

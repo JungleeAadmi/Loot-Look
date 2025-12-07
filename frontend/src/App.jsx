@@ -536,7 +536,8 @@ const ShareModal = ({ bookmark, token, onClose, refreshData }) => {
 const SettingsModal = ({ token, onClose }) => {
   const [settings, setSettings] = useState({ 
     ntfyUrl: '', ntfyTopic: '', notifyEnabled: false,
-    notifySync: false, notifyIncrease: false 
+    notifySync: false, notifyIncrease: false,
+    notifyDrop: true, notifyShare: true
   });
   const [loading, setLoading] = useState(false);
 
@@ -547,7 +548,9 @@ const SettingsModal = ({ token, onClose }) => {
         ntfyTopic: res.data.ntfy_topic || '',
         notifyEnabled: res.data.notify_enabled || false,
         notifySync: res.data.notify_on_sync_complete || false,
-        notifyIncrease: res.data.notify_on_price_increase || false
+        notifyIncrease: res.data.notify_on_price_increase || false,
+        notifyDrop: res.data.notify_on_price_drop !== false, // default true
+        notifyShare: res.data.notify_on_share !== false     // default true
       }))
       .catch(() => {});
   }, []);
@@ -587,12 +590,20 @@ const SettingsModal = ({ token, onClose }) => {
 
           <div className="grid grid-cols-2 gap-3">
              <div className="flex items-center gap-2">
-               <input type="checkbox" id="sync" checked={settings.notifySync} onChange={e => setSettings({...settings, notifySync: e.target.checked})} className="accent-indigo-500 w-4 h-4" />
-               <label htmlFor="sync" className="text-xs text-slate-300">Sync Complete Alert</label>
+               <input type="checkbox" id="drop" checked={settings.notifyDrop} onChange={e => setSettings({...settings, notifyDrop: e.target.checked})} className="accent-indigo-500 w-4 h-4" />
+               <label htmlFor="drop" className="text-xs text-slate-300">Price Drop Alert</label>
              </div>
              <div className="flex items-center gap-2">
                <input type="checkbox" id="inc" checked={settings.notifyIncrease} onChange={e => setSettings({...settings, notifyIncrease: e.target.checked})} className="accent-indigo-500 w-4 h-4" />
                <label htmlFor="inc" className="text-xs text-slate-300">Price Increase Alert</label>
+             </div>
+             <div className="flex items-center gap-2">
+               <input type="checkbox" id="share" checked={settings.notifyShare} onChange={e => setSettings({...settings, notifyShare: e.target.checked})} className="accent-indigo-500 w-4 h-4" />
+               <label htmlFor="share" className="text-xs text-slate-300">Shared Link Alert</label>
+             </div>
+             <div className="flex items-center gap-2">
+               <input type="checkbox" id="sync" checked={settings.notifySync} onChange={e => setSettings({...settings, notifySync: e.target.checked})} className="accent-indigo-500 w-4 h-4" />
+               <label htmlFor="sync" className="text-xs text-slate-300">Sync Complete Alert</label>
              </div>
           </div>
 

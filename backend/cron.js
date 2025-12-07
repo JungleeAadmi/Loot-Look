@@ -23,6 +23,7 @@ const startCronJobs = () => {
                 SELECT b.*, 
                        u.ntfy_url, u.ntfy_topic, u.notify_enabled,
                        u.notify_on_sync_complete, u.notify_on_price_increase,
+                       u.notify_on_price_drop,
                        u.id as user_id
                 FROM bookmarks b
                 JOIN users u ON b.user_id = u.id
@@ -57,7 +58,7 @@ const startCronJobs = () => {
                     // --- PRICE ALERTS ---
                     if (oldPrice > 0) {
                         // DROP
-                        if (currentPrice < oldPrice) {
+                        if (currentPrice < oldPrice && bookmark.notify_on_price_drop) {
                             const drop = oldPrice - currentPrice;
                             await sendNotification(
                                 bookmark, 
@@ -66,7 +67,7 @@ const startCronJobs = () => {
                                 bookmark.url
                             );
                         }
-                        // INCREASE (Optional)
+                        // INCREASE
                         else if (currentPrice > oldPrice && bookmark.notify_on_price_increase) {
                             const hike = currentPrice - oldPrice;
                             await sendNotification(
