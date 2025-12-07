@@ -79,9 +79,10 @@ app.get('/api/users/search', authenticateToken, async (req, res) => {
     } catch (err) { res.status(500).json({ error: 'Search failed' }); }
 });
 
-// ADD BOOKMARK (Updated with Notification)
+// ADD BOOKMARK (Fixed: Now sends notification)
 app.post('/api/bookmarks', authenticateToken, async (req, res) => {
     const { url } = req.body;
+    console.log(`📝 [API] Request to add: ${url}`);
     try {
         const screenshotDir = path.join(__dirname, '../public/screenshots');
         const data = await scrapeBookmark(url, screenshotDir);
@@ -96,24 +97,27 @@ app.post('/api/bookmarks', authenticateToken, async (req, res) => {
             await pool.query(`INSERT INTO price_history (bookmark_id, price) VALUES ($1, $2)`, [result.rows[0].id, data.price]);
         }
 
-        // --- NOTIFY USER OF SUCCESS ---
-        // Fetch user settings to check if they want alerts
+        // --- NOTIFICATION BLOCK ---
         const userRes = await pool.query('SELECT * FROM users WHERE id = $1', [req.user.id]);
         const userSettings = userRes.rows[0];
-        
-        // We use 'notify_enabled' as a general gate for this "Add" confirmation
+
+        // Send alert if Master Switch is ON (We don't have a specific toggle for "Add", so we use master)
         if (userSettings && userSettings.notify_enabled) {
+            console.log(`🔔 Sending "Link Added" alert to ${userSettings.username}`);
             await sendNotification(
                 userSettings,
                 `Link Added 🔖`,
-                `Successfully added: ${data.title.substring(0, 40)}...`,
+                `Successfully tracked: ${data.title.substring(0, 40)}...`,
                 ''
             );
         }
-        // ------------------------------
+        // -------------------------
 
         res.json(result.rows[0]);
-    } catch (err) { res.status(500).json({ error: 'Failed to add link' }); }
+    } catch (err) { 
+        console.error("Add Error:", err);
+        res.status(500).json({ error: 'Failed to add link' }); 
+    }
 });
 
 app.get('/api/bookmarks', authenticateToken, async (req, res) => {
@@ -139,29 +143,19 @@ app.get('/api/bookmarks', authenticateToken, async (req, res) => {
 
 app.get('/api/bookmarks/:id/shares', authenticateToken, async (req, res) => {
     try {
-        const result = await pool.query(`
-            SELECT u.id, u.username 
-            FROM shared_bookmarks sb
-            JOIN users u ON sb.receiver_id = u.id
-            WHERE sb.bookmark_id = $1 AND sb.sender_id = $2
-        `, [req.params.id, req.user.id]);
+        const result = await pool.query(`SELECT u.id, u.username FROM shared_bookmarks sb JOIN users u ON sb.receiver_id = u.id WHERE sb.bookmark_id = $1 AND sb.sender_id = $2`, [req.params.id, req.user.id]);
         res.json(result.rows);
-    } catch (err) { res.status(500).json({ error: 'Failed to fetch shares' }); }
+    } catch (err) { res.status(500).json({ error: 'Failed' }); }
 });
 
 app.get('/api/bookmarks/:id/history', authenticateToken, async (req, res) => {
     try {
-        const result = await pool.query(`
-            SELECT price, recorded_at 
-            FROM price_history 
-            WHERE bookmark_id = $1 
-            ORDER BY recorded_at ASC
-        `, [req.params.id]);
+        const result = await pool.query(`SELECT price, recorded_at FROM price_history WHERE bookmark_id = $1 ORDER BY recorded_at ASC`, [req.params.id]);
         res.json(result.rows);
     } catch (err) { res.status(500).json({ error: 'History failed' }); }
 });
 
-// SHARE + NOTIFICATION (Debugged)
+// SHARE (Fixed: Debug logs + Loose Boolean Check)
 app.post('/api/bookmarks/:id/share', authenticateToken, async (req, res) => {
     const { receiverId } = req.body;
     try {
@@ -174,14 +168,17 @@ app.post('/api/bookmarks/:id/share', authenticateToken, async (req, res) => {
             [req.params.id, req.user.id, receiverId]
         );
 
-        // Fetch Receiver Settings
+        // Notify Receiver
         const receiverRes = await pool.query('SELECT ntfy_url, ntfy_topic, notify_enabled, notify_on_share FROM users WHERE id = $1', [receiverId]);
-        
-        if (receiverRes.rows.length > 0) {
-            const receiver = receiverRes.rows[0];
-            console.log(`[Share Notify] Checking for user ${receiverId}... Enabled: ${receiver.notify_enabled}, OnShare: ${receiver.notify_on_share}`);
+        const receiver = receiverRes.rows[0];
+
+        if (receiver) {
+            console.log(`🔔 [Share Logic] Receiver found: Enabled=${receiver.notify_enabled}, OnShare=${receiver.notify_on_share}`);
             
-            if (receiver.notify_enabled && receiver.notify_on_share) {
+            // We assume true if the specific toggle is NULL (legacy users)
+            const shareToggle = receiver.notify_on_share !== false; 
+
+            if (receiver.notify_enabled && shareToggle) {
                 await sendNotification(
                     receiver,
                     `New Shared Item 🎁`,
@@ -189,8 +186,6 @@ app.post('/api/bookmarks/:id/share', authenticateToken, async (req, res) => {
                     ''
                 );
             }
-        } else {
-            console.log(`[Share Notify] Receiver ${receiverId} not found or no settings.`);
         }
 
         res.json({ message: 'Shared' });
