@@ -24,8 +24,6 @@ const initDB = async () => {
         await client.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS ntfy_url TEXT;`);
         await client.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS ntfy_topic TEXT;`);
         await client.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS notify_enabled BOOLEAN DEFAULT FALSE;`);
-        
-        // NEW: Granular Controls
         await client.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS notify_on_sync_complete BOOLEAN DEFAULT FALSE;`);
         await client.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS notify_on_price_increase BOOLEAN DEFAULT FALSE;`);
         // ------------------------------

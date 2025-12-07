@@ -4,7 +4,7 @@ const path = require('path');
 const { initDB, pool } = require('./db');
 const { scrapeBookmark, scanImageForPrice } = require('./scraper');
 const { startCronJobs } = require('./cron');
-const { sendNotification } = require('./notifications'); // Import
+const { sendNotification } = require('./notifications'); 
 const { authenticateToken, register, login } = require('./auth');
 
 const app = express();
@@ -126,41 +126,33 @@ app.get('/api/bookmarks/:id/history', authenticateToken, async (req, res) => {
     } catch (err) { res.status(500).json({ error: 'History failed' }); }
 });
 
-// --- SHARE BOOKMARK (UPDATED WITH NOTIFICATION) ---
+// SHARE + NOTIFICATION
 app.post('/api/bookmarks/:id/share', authenticateToken, async (req, res) => {
     const { receiverId } = req.body;
     try {
-        // 1. Validate ownership
         const check = await pool.query('SELECT * FROM bookmarks WHERE id = $1 AND user_id = $2', [req.params.id, req.user.id]);
         if (check.rows.length === 0) return res.status(403).json({ error: 'Unauthorized' });
-        
         const bookmark = check.rows[0];
 
-        // 2. Add share record
         await pool.query(
             'INSERT INTO shared_bookmarks (bookmark_id, sender_id, receiver_id) VALUES ($1, $2, $3) ON CONFLICT DO NOTHING',
             [req.params.id, req.user.id, receiverId]
         );
 
-        // 3. Notify Receiver
-        // Fetch receiver's ntfy settings
+        // Notify Receiver
         const receiverRes = await pool.query('SELECT ntfy_url, ntfy_topic, notify_enabled FROM users WHERE id = $1', [receiverId]);
         const receiver = receiverRes.rows[0];
-
         if (receiver) {
             await sendNotification(
                 receiver,
                 `New Shared Item 🎁`,
                 `@${req.user.username} shared "${bookmark.title}" with you!`,
-                '' // Could link to app if you had a public URL
+                ''
             );
         }
 
-        res.json({ message: 'Shared successfully' });
-    } catch (err) { 
-        console.error(err);
-        res.status(500).json({ error: 'Share failed' }); 
-    }
+        res.json({ message: 'Shared' });
+    } catch (err) { res.status(500).json({ error: 'Share failed' }); }
 });
 
 app.post('/api/bookmarks/:id/unshare', authenticateToken, async (req, res) => {

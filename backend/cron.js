@@ -15,7 +15,7 @@ const startCronJobs = () => {
         
         const client = await pool.connect();
         let updatedCount = 0;
-        let usersToNotifyComplete = new Set(); // Track users who want sync completion alerts
+        let usersToNotifyComplete = new Set(); 
 
         try {
             // Get bookmarks + owner preferences
@@ -33,19 +33,16 @@ const startCronJobs = () => {
             console.log(`Found ${bookmarks.length} items to check.`);
 
             for (const bookmark of bookmarks) {
-                // Collect users for "Sync Complete" notification
                 if (bookmark.notify_on_sync_complete && bookmark.notify_enabled) {
                     usersToNotifyComplete.add(bookmark.user_id);
                 }
 
-                // Re-scrape
                 const newData = await scrapeBookmark(bookmark.url, SCREENSHOT_DIR);
 
                 if (newData.price) {
                     const currentPrice = parseFloat(newData.price);
                     const oldPrice = parseFloat(bookmark.current_price || 0);
 
-                    // Update DB
                     await client.query(`
                         UPDATE bookmarks 
                         SET current_price = $1, previous_price = $2, last_checked = NOW(), 
@@ -59,7 +56,7 @@ const startCronJobs = () => {
 
                     // --- PRICE ALERTS ---
                     if (oldPrice > 0) {
-                        // CASE 1: Price DROP
+                        // DROP
                         if (currentPrice < oldPrice) {
                             const drop = oldPrice - currentPrice;
                             await sendNotification(
@@ -69,7 +66,7 @@ const startCronJobs = () => {
                                 bookmark.url
                             );
                         }
-                        // CASE 2: Price INCREASE (Only if enabled)
+                        // INCREASE (Optional)
                         else if (currentPrice > oldPrice && bookmark.notify_on_price_increase) {
                             const hike = currentPrice - oldPrice;
                             await sendNotification(
@@ -83,10 +80,8 @@ const startCronJobs = () => {
                 }
             }
 
-            // --- SYNC COMPLETE ALERT ---
-            // Send "Scan Finished" message to users who opted in
+            // --- SYNC COMPLETE ---
             for (const userId of usersToNotifyComplete) {
-                // Fetch settings for this specific user again to be safe
                 const userRes = await client.query('SELECT * FROM users WHERE id = $1', [userId]);
                 const user = userRes.rows[0];
                 
@@ -94,7 +89,7 @@ const startCronJobs = () => {
                     user,
                     `Sync Complete ✅`,
                     `Checked ${updatedCount} items at ${new Date().toLocaleTimeString()}.`,
-                    '' // No click URL
+                    '' 
                 );
             }
 

@@ -3,10 +3,12 @@ const axios = require('axios');
 // Send a push notification via Ntfy
 async function sendNotification(userSettings, title, message, clickUrl) {
     if (!userSettings.notify_enabled || !userSettings.ntfy_url || !userSettings.ntfy_topic) {
-        return; // Notifications disabled or not configured
+        return; 
     }
 
-    const targetUrl = `${userSettings.ntfy_url}/${userSettings.ntfy_topic}`;
+    // Ensure no double slashes if user puts / at end of URL
+    const baseUrl = userSettings.ntfy_url.replace(/\/$/, '');
+    const targetUrl = `${baseUrl}/${userSettings.ntfy_topic}`;
     
     try {
         await axios.post(targetUrl, message, {
