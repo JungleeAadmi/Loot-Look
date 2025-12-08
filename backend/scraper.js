@@ -1,204 +1,209 @@
-const { chromium } = require('playwright');
-const cheerio = require('cheerio');
-const fs = require('fs');
+const express = require('express');
+const cors = require('cors');
 const path = require('path');
-const { extractPriceFromImage } = require('./ocr'); 
+const { initDB, pool } = require('./db');
+const { scrapeBookmark, scanImageForPrice } = require('./scraper');
+const { startCronJobs } = require('./cron');
+const { sendNotification } = require('./notifications'); 
+const { authenticateToken, register, login } = require('./auth');
 
-const DESKTOP_UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36';
+const app = express();
+const PORT = process.env.PORT || 3000;
 
-const CURRENCY_MAP = {
-    '$': 'USD', '€': 'EUR', '£': 'GBP', '¥': 'JPY', '₹': 'INR', 'Rs': 'INR', 'RP': 'IDR', 'RM': 'MYR', 'AED': 'AED'
-};
+app.use(cors());
+app.use(express.json());
+app.use('/screenshots', express.static(path.join(__dirname, '../public/screenshots')));
 
-async function scrapeBookmark(url, screenshotDir) {
-    console.log(`🔍 [Scraper] Starting: ${url}`);
-    
-    let browser = null;
-    let data = {
-        title: 'New Bookmark',
-        price: null,
-        currency: 'INR',
-        imagePath: null,
-        isTracked: false,
-        site_name: 'Web'
-    };
+(async () => {
+    try { await initDB(); startCronJobs(); } 
+    catch (err) { console.error("Critical Startup Error:", err); }
+})();
 
+// --- AUTH ---
+app.post('/api/auth/register', register);
+app.post('/api/auth/login', login);
+
+// --- SETTINGS ---
+app.get('/api/user/settings', authenticateToken, async (req, res) => {
     try {
-        try { data.site_name = new URL(url).hostname.replace('www.', ''); } 
-        catch (e) { data.site_name = 'Web'; }
+        const result = await pool.query(`
+            SELECT ntfy_url, ntfy_topic, notify_enabled, 
+                   notify_on_sync_complete, notify_on_price_increase,
+                   notify_on_price_drop, notify_on_share
+            FROM users WHERE id = $1
+        `, [req.user.id]);
+        res.json(result.rows[0]);
+    } catch (err) { res.status(500).json({ error: 'Failed to load settings' }); }
+});
 
-        browser = await chromium.launch({
-            headless: false,
-            args: [
-                '--no-sandbox', '--disable-setuid-sandbox', '--disable-dev-shm-usage', '--disable-gpu',
-                '--window-size=1080,1920', '--disable-blink-features=AutomationControlled'
-            ]
-        });
+app.put('/api/user/settings', authenticateToken, async (req, res) => {
+    const { ntfyUrl, ntfyTopic, notifyEnabled, notifySync, notifyIncrease, notifyDrop, notifyShare } = req.body;
+    try {
+        await pool.query(`
+            UPDATE users SET 
+                ntfy_url = $1, ntfy_topic = $2, notify_enabled = $3,
+                notify_on_sync_complete = $4, notify_on_price_increase = $5,
+                notify_on_price_drop = $6, notify_on_share = $7
+            WHERE id = $8
+        `, [ntfyUrl, ntfyTopic, notifyEnabled, notifySync, notifyIncrease, notifyDrop, notifyShare, req.user.id]);
+        res.json({ message: 'Settings saved' });
+    } catch (err) { res.status(500).json({ error: 'Failed to save' }); }
+});
 
-        const context = await browser.newContext({
-            userAgent: DESKTOP_UA,
-            viewport: { width: 1080, height: 1920 },
-            deviceScaleFactor: 1,
-            isMobile: false, 
-            locale: 'en-IN', timezoneId: 'Asia/Kolkata',
-            extraHTTPHeaders: { 'Accept-Language': 'en-US,en;q=0.9' }
-        });
+app.post('/api/user/test-notify', authenticateToken, async (req, res) => {
+    const { ntfyUrl, ntfyTopic } = req.body;
+    try {
+        const fakeSettings = { ntfy_url: ntfyUrl, ntfy_topic: ntfyTopic, notify_enabled: true };
+        await sendNotification(fakeSettings, 'LootLook Test', 'This is a test alert! 🚀', 'https://google.com');
+        res.json({ message: 'Sent' });
+    } catch (err) { res.status(500).json({ error: 'Failed' }); }
+});
 
-        await context.addInitScript(() => { Object.defineProperty(navigator, 'webdriver', { get: () => undefined }); });
+// --- USERS & BOOKMARKS ---
+app.get('/api/users/search', authenticateToken, async (req, res) => {
+    const { q } = req.query;
+    try {
+        const result = await pool.query('SELECT id, username FROM users WHERE username ILIKE $1 AND id != $2 LIMIT 5', [`%${q}%`, req.user.id]);
+        res.json(result.rows);
+    } catch (err) { res.status(500).json({ error: 'Search failed' }); }
+});
 
-        const page = await context.newPage();
-
-        try {
-            console.log(`   -> Navigating to ${url}...`);
-            await page.goto(url, { waitUntil: 'domcontentloaded', timeout: 60000 });
-        } catch (navError) { console.warn(`   ⚠️ Navigation timeout. Proceeding.`); }
+app.post('/api/bookmarks', authenticateToken, async (req, res) => {
+    const { url } = req.body;
+    console.log(`📝 [API] Request to add: ${url}`);
+    try {
+        const screenshotDir = path.join(__dirname, '../public/screenshots');
+        const data = await scrapeBookmark(url, screenshotDir);
         
-        // Anti-Popup
-        const safeClick = async (selector) => {
-            try {
-                const el = page.locator(selector).first();
-                if (await el.isVisible({ timeout: 1000 })) await el.click({ timeout: 500 });
-            } catch (e) {}
-        };
-        await safeClick('button:has-text("Accept")');
-        await safeClick('[aria-label="Close"]');
+        const result = await pool.query(`
+            INSERT INTO bookmarks (user_id, url, title, image_url, site_name, is_tracked, current_price, currency, created_at)
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, NOW())
+            RETURNING *
+        `, [req.user.id, url, data.title, data.imagePath, data.site_name, data.isTracked, data.price, data.currency]);
 
-        // --- SMART WAIT (The Fix) ---
-        // Explicitly wait for price elements on known sites to ensure they render
-        try {
-            const waitSelectors = ['h1', 'img'];
-            if (url.includes('myntra')) waitSelectors.push('.pdp-price', '.pdp-selling-price');
-            if (url.includes('flipkart')) waitSelectors.push('div[class*="_30jeq3"]', 'div[class*="Nx9bqj"]');
-            if (url.includes('amazon')) waitSelectors.push('.a-price-whole');
+        if (data.isTracked) {
+            await pool.query(`INSERT INTO price_history (bookmark_id, price) VALUES ($1, $2)`, [result.rows[0].id, data.price]);
+        }
 
-            await Promise.race([
-                ...waitSelectors.map(s => page.waitForSelector(s, { timeout: 5000 }).catch(()=>{})),
-                new Promise(r => setTimeout(r, 2000))
-            ]);
+        // Notify User of Add
+        const userRes = await pool.query('SELECT * FROM users WHERE id = $1', [req.user.id]);
+        const userSettings = userRes.rows[0];
+        if (userSettings && userSettings.notify_enabled) {
+            await sendNotification(userSettings, `Link Added 🔖`, `Successfully tracked: ${data.title.substring(0, 40)}...`, '');
+        }
 
-            // Scroll to force lazy loads
-            await page.evaluate(async () => {
-                window.scrollTo(0, document.body.scrollHeight / 3);
-                await new Promise(r => setTimeout(r, 1000));
-                window.scrollTo(0, 0);
-            });
-            await page.waitForTimeout(1000); 
-        } catch (e) {}
+        res.json(result.rows[0]);
+    } catch (err) { 
+        console.error("Add Error:", err);
+        res.status(500).json({ error: 'Failed to add link' }); 
+    }
+});
 
-        // Screenshot
-        const fileName = `${Date.now()}_${Math.floor(Math.random()*1000)}.jpg`;
-        const filePath = path.join(screenshotDir, fileName);
-        if (!fs.existsSync(screenshotDir)) fs.mkdirSync(screenshotDir, { recursive: true });
-        
-        await page.screenshot({ path: filePath, quality: 60 });
-        data.imagePath = `/screenshots/${fileName}`;
-        console.log(`   -> Screenshot saved.`);
+app.get('/api/bookmarks', authenticateToken, async (req, res) => {
+    try {
+        const result = await pool.query(`
+            SELECT b.*, u.username as owner_name,
+                   CASE WHEN b.user_id = $1 THEN NULL ELSE u.username END as shared_by,
+                   CASE WHEN b.user_id = $1 THEN (SELECT u2.username FROM shared_bookmarks sb JOIN users u2 ON sb.receiver_id = u2.id WHERE sb.bookmark_id = b.id LIMIT 1) ELSE NULL END as shared_with
+            FROM bookmarks b
+            LEFT JOIN users u ON b.user_id = u.id
+            LEFT JOIN shared_bookmarks sb ON b.id = sb.bookmark_id
+            WHERE b.user_id = $1 OR sb.receiver_id = $1
+            ORDER BY b.created_at DESC
+        `, [req.user.id]);
+        res.json(result.rows);
+    } catch (err) { res.status(500).json({ error: 'Failed' }); }
+});
 
-        const content = await page.content();
-        const $ = cheerio.load(content);
-        
-        data.title = $('h1').first().text().trim() || $('meta[property="og:title"]').attr('content') || $('title').text().trim() || data.site_name;
+app.get('/api/bookmarks/:id/shares', authenticateToken, async (req, res) => {
+    try {
+        const result = await pool.query(`SELECT u.id, u.username FROM shared_bookmarks sb JOIN users u ON sb.receiver_id = u.id WHERE sb.bookmark_id = $1 AND sb.sender_id = $2`, [req.params.id, req.user.id]);
+        res.json(result.rows);
+    } catch (err) { res.status(500).json({ error: 'Failed' }); }
+});
 
-        // Layer 1: JSON-LD
-        $('script[type="application/ld+json"]').each((i, el) => {
-            try {
-                const json = JSON.parse($(el).html());
-                const entities = Array.isArray(json) ? json : [json];
-                const product = entities.find(e => e['@type'] === 'Product');
-                if (product) {
-                    const offer = Array.isArray(product.offers) ? product.offers[0] : product.offers;
-                    if (offer) {
-                        data.price = parseFloat(offer.price);
-                        if (offer.priceCurrency) data.currency = offer.priceCurrency;
-                    }
-                }
-            } catch (e) {}
-        });
+app.get('/api/bookmarks/:id/history', authenticateToken, async (req, res) => {
+    try {
+        const result = await pool.query(`SELECT price, recorded_at FROM price_history WHERE bookmark_id = $1 ORDER BY recorded_at ASC`, [req.params.id]);
+        res.json(result.rows);
+    } catch (err) { res.status(500).json({ error: 'History failed' }); }
+});
 
-        // Layer 2: Selectors (Prioritized)
-        if (!data.price) {
-            const selectors = [
-                '.pdp-selling-price',       // Myntra Main
-                '.pdp-price strong',        // Myntra Backup
-                '.a-price-whole',           // Amazon
-                'div[class*="_30jeq3"]',    // Flipkart
-                'div[class*="Nx9bqj"]',     // Flipkart New
-                'h4:contains("₹")',         // Meesho
-                '[data-testid="price"]',
-                '.price', '[class*="price"]',
-                // Generic catch-alls at the bottom
-                'span:contains("₹")',
-                'span:contains("Rs.")' 
-            ];
+app.post('/api/bookmarks/:id/share', authenticateToken, async (req, res) => {
+    const { receiverId } = req.body;
+    try {
+        const check = await pool.query('SELECT * FROM bookmarks WHERE id = $1 AND user_id = $2', [req.params.id, req.user.id]);
+        if (check.rows.length === 0) return res.status(403).json({ error: 'Unauthorized' });
+        const bookmark = check.rows[0];
 
-            for (const sel of selectors) {
-                // Get element
-                const el = $(sel).first();
-                const text = el.text();
-                
-                // --- CONTEXT CHECK (The Fix for "Orders above 300") ---
-                // If the text or its parent contains invalid keywords, skip it.
-                const context = (el.parent().text() + text).toLowerCase();
-                if (context.includes('orders above') || 
-                    context.includes('min purchase') || 
-                    context.includes('save') ||
-                    context.includes('off')) {
-                    continue; // Skip this "price", it's an offer
-                }
+        await pool.query('INSERT INTO shared_bookmarks (bookmark_id, sender_id, receiver_id) VALUES ($1, $2, $3) ON CONFLICT DO NOTHING', [req.params.id, req.user.id, receiverId]);
 
-                const result = parsePriceAndCurrency(text);
-                if (result.price) { 
-                    data.price = result.price;
-                    if (result.currency) data.currency = result.currency;
-                    break; 
-                }
+        // Notify Receiver
+        const receiverRes = await pool.query('SELECT ntfy_url, ntfy_topic, notify_enabled, notify_on_share FROM users WHERE id = $1', [receiverId]);
+        if (receiverRes.rows.length > 0) {
+            const receiver = receiverRes.rows[0];
+            const shareToggle = receiver.notify_on_share !== false; 
+            if (receiver.notify_enabled && shareToggle) {
+                await sendNotification(receiver, `New Shared Item 🎁`, `@${req.user.username} shared "${bookmark.title}" with you!`, '');
             }
         }
+        res.json({ message: 'Shared' });
+    } catch (err) { console.error(err); res.status(500).json({ error: 'Share failed' }); }
+});
 
-        // Layer 3: Meta
-        if (!data.price) {
-            const metaPrice = $('meta[property="product:price:amount"]').attr('content') || $('meta[property="og:price:amount"]').attr('content');
-            if (metaPrice) data.price = parseFloat(metaPrice);
-            const metaCurr = $('meta[property="product:price:currency"]').attr('content');
-            if (metaCurr) data.currency = metaCurr;
+app.post('/api/bookmarks/:id/unshare', authenticateToken, async (req, res) => {
+    const { receiverId } = req.body;
+    try {
+        await pool.query('DELETE FROM shared_bookmarks WHERE bookmark_id = $1 AND sender_id = $2 AND receiver_id = $3', [req.params.id, req.user.id, receiverId]);
+        res.json({ message: 'Unshared' });
+    } catch (err) { res.status(500).json({ error: 'Unshare failed' }); }
+});
+
+app.post('/api/bookmarks/:id/check', authenticateToken, async (req, res) => {
+    try {
+        const bm = await pool.query('SELECT * FROM bookmarks WHERE id = $1', [req.params.id]);
+        if (bm.rows.length === 0) return res.status(404).send('Not found');
+        const screenshotDir = path.join(__dirname, '../public/screenshots');
+        const data = await scrapeBookmark(bm.rows[0].url, screenshotDir);
+        if (data.price) {
+            const oldPrice = parseFloat(bm.rows[0].current_price || 0);
+            await pool.query(`UPDATE bookmarks SET current_price = $1, previous_price = $2, title = $3, image_url = $4, last_checked = NOW() WHERE id = $5`, [data.price, oldPrice, data.title, data.imagePath, req.params.id]);
+            await pool.query('INSERT INTO price_history (bookmark_id, price) VALUES ($1, $2)', [req.params.id, data.price]);
+        } else {
+            await pool.query(`UPDATE bookmarks SET title = $1, image_url = $2, last_checked = NOW() WHERE id = $3`, [data.title, data.imagePath, req.params.id]);
         }
+        res.json({ message: 'Updated', price: data.price });
+    } catch (err) { res.status(500).json({ error: 'Failed' }); }
+});
 
-        // Layer 4: OCR Backup
-        if (!data.price && data.imagePath) {
-            console.log("   ⚠️ Standard scraping failed. Attempting OCR backup...");
-            const absPath = path.resolve(screenshotDir, fileName);
-            const ocrPrice = await extractPriceFromImage(absPath);
-            if (ocrPrice) data.price = ocrPrice;
+app.post('/api/bookmarks/:id/ocr', authenticateToken, async (req, res) => {
+    try {
+        const bm = await pool.query('SELECT * FROM bookmarks WHERE id = $1', [req.params.id]);
+        if (bm.rows.length === 0) return res.status(404).send('Not found');
+        const bookmark = bm.rows[0];
+        if (!bookmark.image_url) return res.status(400).json({ error: 'No image' });
+        const { scanImageForPrice } = require('./scraper');
+        const price = await scanImageForPrice(bookmark.image_url, path.join(__dirname, '../public'));
+        if (price) {
+            await pool.query(`UPDATE bookmarks SET current_price = $1, is_tracked = TRUE WHERE id = $2`, [price, req.params.id]);
+            await pool.query('INSERT INTO price_history (bookmark_id, price) VALUES ($1, $2)', [req.params.id, price]);
+            res.json({ message: 'Price found', price });
+        } else { res.json({ message: 'No price found', price: null }); }
+    } catch (err) { res.status(500).json({ error: 'OCR Failed' }); }
+});
+
+app.delete('/api/bookmarks/:id', authenticateToken, async (req, res) => {
+    try {
+        const result = await pool.query('DELETE FROM bookmarks WHERE id = $1 AND user_id = $2 RETURNING *', [req.params.id, req.user.id]);
+        if (result.rows.length === 0) {
+            const sharedResult = await pool.query('DELETE FROM shared_bookmarks WHERE bookmark_id = $1 AND receiver_id = $2 RETURNING *', [req.params.id, req.user.id]);
+            if (sharedResult.rows.length === 0) return res.status(404).json({ error: 'Not found' });
         }
+        res.json({ message: 'Deleted' });
+    } catch (err) { res.status(500).json({ error: 'Delete failed' }); }
+});
 
-        if (data.price && !isNaN(data.price)) data.isTracked = true;
-
-    } catch (error) {
-        console.error(`❌ [Scraper Error] ${url}:`, error.message);
-    } finally {
-        if (browser) await browser.close();
-    }
-
-    return data;
-}
-
-async function scanImageForPrice(imageRelativePath, publicDir) {
-    const fileName = path.basename(imageRelativePath);
-    const absPath = path.join(publicDir, 'screenshots', fileName);
-    if (!fs.existsSync(absPath)) return null;
-    return await extractPriceFromImage(absPath);
-}
-
-function parsePriceAndCurrency(text) {
-    if (!text) return { price: null, currency: null };
-    let currency = null;
-    for (const [symbol, code] of Object.entries(CURRENCY_MAP)) {
-        if (text.includes(symbol)) { currency = code; break; }
-    }
-    const clean = text.replace(/[^0-9.]/g, ''); 
-    const num = parseFloat(clean);
-    if (isNaN(num) || num < 1) return { price: null, currency: null };
-    return { price: num, currency: currency };
-}
-
-module.exports = { scrapeBookmark, scanImageForPrice };
+const distPath = path.join(__dirname, '../frontend/dist');
+app.use(express.static(distPath));
+app.get('*', (req, res) => res.sendFile(path.join(distPath, 'index.html')));
+app.listen(PORT, '0.0.0.0', () => console.log(`🚀 LootLook running on ${PORT}`));
