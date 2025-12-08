@@ -2,14 +2,13 @@ import React, { useState, useEffect } from 'react';
 import { 
   LogOut, ExternalLink, RefreshCw, ShoppingBag, Link as LinkIcon, Loader2,
   Share2, Trash2, Eye, X, Plus, Search, Copy, Download, UserMinus, LogOut as LeaveIcon,
-  ScanSearch, Filter, Bell
+  ScanSearch, Filter, Bell, TrendingUp // Added TrendingUp Icon
 } from 'lucide-react';
 import axios from 'axios';
 import { AreaChart, Area, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid } from 'recharts';
 
 const API_URL = '/api';
 
-// Date Formatter: Dynamic (Uses User's Local Device Time)
 const formatDate = (dateString) => {
   if (!dateString) return 'Never';
   return new Date(dateString).toLocaleString('en-IN', {
@@ -85,7 +84,6 @@ const App = () => {
   );
 };
 
-// --- UPDATED AUTH FORM WITH BRANDING ---
 const AuthForm = ({ type, onAuth, onSwitch }) => {
   const [formData, setFormData] = useState({ username: '', password: '' });
   const [loading, setLoading] = useState(false);
@@ -110,62 +108,19 @@ const AuthForm = ({ type, onAuth, onSwitch }) => {
 
   return (
     <div className="flex items-center justify-center min-h-screen p-6 relative overflow-hidden">
-      {/* Background Decor */}
-      <div className="absolute top-[-10%] left-[-10%] w-[40%] h-[40%] bg-indigo-600/20 rounded-full blur-[120px] pointer-events-none"></div>
-      <div className="absolute bottom-[-10%] right-[-10%] w-[40%] h-[40%] bg-purple-600/20 rounded-full blur-[120px] pointer-events-none"></div>
-
-      <div className="glass-panel p-8 md:p-12 rounded-3xl w-full max-w-md relative z-10 shadow-2xl border border-white/10">
-        
-        {/* BRANDING HEADER */}
-        <div className="flex flex-col items-center mb-10">
-          <div className="w-20 h-20 bg-indigo-500/10 rounded-3xl flex items-center justify-center mb-5 border border-indigo-500/20 shadow-[0_0_30px_-10px_rgba(99,102,241,0.3)]">
-             {/* Uses your logo.png from public folder */}
-             <img src="/logo.png" alt="Logo" className="w-12 h-12 object-contain" />
-          </div>
-          <h1 className="text-4xl font-bold text-white tracking-tight mb-2">LootLook</h1>
-          <p className="text-slate-400 font-medium text-sm">
-            {type === 'login' ? 'Sign in to your collection' : 'Start tracking prices today'}
-          </p>
-        </div>
-
-        <form onSubmit={handleSubmit} className="space-y-5">
-          <div>
-            <label className="block text-xs font-bold text-slate-500 uppercase tracking-wider mb-1.5 ml-1">Username</label>
-            <input 
-              type="text" 
-              className="w-full p-4 rounded-xl input-premium text-base" 
-              placeholder="Enter your username" 
-              value={formData.username} 
-              onChange={e => setFormData({...formData, username: e.target.value})} 
-              required 
-            />
-          </div>
-          <div>
-            <label className="block text-xs font-bold text-slate-500 uppercase tracking-wider mb-1.5 ml-1">Password</label>
-            <input 
-              type="password" 
-              className="w-full p-4 rounded-xl input-premium text-base" 
-              placeholder="••••••••" 
-              value={formData.password} 
-              onChange={e => setFormData({...formData, password: e.target.value})} 
-              required 
-            />
-          </div>
-          
-          {error && <div className="p-3 rounded-xl bg-red-500/10 border border-red-500/20 text-red-400 text-xs font-medium text-center">{error}</div>}
-          
-          <button type="submit" disabled={loading} className="w-full p-4 rounded-xl btn-primary font-bold shadow-lg flex justify-center gap-2 mt-2 text-base">
+      <div className="glass-panel p-8 md:p-12 rounded-3xl w-full max-w-md relative z-10 shadow-2xl">
+        <div className="flex justify-center mb-6"><div className="bg-indigo-500/20 p-4 rounded-2xl"><ShoppingBag size={40} className="text-indigo-400" /></div></div>
+        <h1 className="text-3xl font-bold mb-2 text-center text-white">{type === 'login' ? 'Welcome Back' : 'Join LootLook'}</h1>
+        <form onSubmit={handleSubmit} className="space-y-5 mt-8">
+          <input type="text" className="w-full p-4 rounded-xl input-premium" placeholder="Username" value={formData.username} onChange={e => setFormData({...formData, username: e.target.value})} required />
+          <input type="password" className="w-full p-4 rounded-xl input-premium" placeholder="Password" value={formData.password} onChange={e => setFormData({...formData, password: e.target.value})} required />
+          {error && <div className="text-red-400 text-xs text-center">{error}</div>}
+          <button type="submit" disabled={loading} className="w-full p-4 rounded-xl btn-primary font-bold shadow-lg flex justify-center gap-2">
             {loading ? <Loader2 className="animate-spin" /> : (type === 'login' ? 'Sign In' : 'Create Account')}
           </button>
         </form>
-
         <div className="mt-8 text-center pt-6 border-t border-white/5">
-          <p className="text-slate-500 text-sm">
-            {type === 'login' ? "Don't have an account? " : "Already have an account? "}
-            <button className="text-indigo-400 hover:text-indigo-300 font-semibold transition-colors" onClick={onSwitch}>
-              {type === 'login' ? "Sign up" : "Log in"}
-            </button>
-          </p>
+          <button className="text-slate-400 text-sm hover:text-white" onClick={onSwitch}>{type === 'login' ? "New? Sign up" : "Have account? Login"}</button>
         </div>
       </div>
     </div>
@@ -237,7 +192,7 @@ const Dashboard = ({ user, token, onLogout, openSnip, openHistory, openSettings 
   return (
     <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-4 sm:py-8">
       
-      {/* RESPONSIVE NAVBAR: FLEX WRAP & GAP ADJUSTMENTS */}
+      {/* RESPONSIVE NAVBAR */}
       <nav className="flex flex-col xl:flex-row justify-between items-center mb-8 gap-4 glass-panel p-4 rounded-3xl">
         
         {/* Logo Section */}
@@ -253,7 +208,7 @@ const Dashboard = ({ user, token, onLogout, openSnip, openHistory, openSettings 
           </div>
         </div>
         
-        {/* Add Link Bar - Flex grow on desktop, full width on mobile */}
+        {/* Add Link Bar */}
         <form onSubmit={handleAdd} className="relative group w-full xl:max-w-lg xl:mx-4">
           <div className="absolute left-4 top-1/2 -translate-y-1/2 text-slate-400">
             {adding ? <Loader2 className="animate-spin" size={18} /> : <Plus size={18} />}
@@ -276,10 +231,10 @@ const Dashboard = ({ user, token, onLogout, openSnip, openHistory, openSettings 
           </button>
         </form>
         
-        {/* Controls Grid - Wraps safely on mobile */}
+        {/* Controls Grid */}
         <div className="flex flex-wrap justify-center xl:justify-end gap-2 w-full xl:w-auto">
           
-          {/* Filter Dropdown - Full width on very small screens */}
+          {/* Filter Dropdown */}
           <div className="relative flex-grow sm:flex-grow-0">
             <select 
               value={filter} 
@@ -427,7 +382,8 @@ const BookmarkCard = ({ data, token, refreshData, onSnip, onShare, onHistory }) 
               {data.previous_price && (<span className="text-xs text-slate-500 line-through mr-2">{fmt(data.previous_price)}</span>)}
               <div className={`text-xl sm:text-2xl font-bold ${priceColor} tracking-tight flex items-center gap-2`}>
                 {fmt(data.current_price)}
-                <AreaChart size={14} className="text-slate-600 group-hover/price:text-indigo-400 transition-colors opacity-0 group-hover/price:opacity-100" />
+                {/* FIX: Use correct icon for history button */}
+                <TrendingUp size={16} className="text-slate-600 group-hover/price:text-indigo-400 transition-colors opacity-0 group-hover/price:opacity-100" />
               </div>
             </div>
           ) : (
