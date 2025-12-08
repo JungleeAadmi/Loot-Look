@@ -4,6 +4,7 @@ const fs = require('fs');
 const path = require('path');
 const { extractPriceFromImage } = require('./ocr'); 
 
+// Standard Windows Desktop Chrome UA
 const DESKTOP_UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123.0.0.0 Safari/537.36';
 
 const CURRENCY_MAP = {
@@ -27,8 +28,9 @@ async function scrapeBookmark(url, screenshotDir) {
         try { data.site_name = new URL(url).hostname.replace('www.', ''); } 
         catch (e) { data.site_name = 'Web'; }
 
+        // HEADFUL MODE (Critical for Meesho/Myntra)
         browser = await chromium.launch({
-            headless: false,
+            headless: false, // Run visible (hidden inside Xvfb)
             args: [
                 '--no-sandbox', 
                 '--disable-setuid-sandbox', 
@@ -36,26 +38,8 @@ async function scrapeBookmark(url, screenshotDir) {
                 '--disable-gpu',
                 '--window-size=1080,1920', 
                 '--disable-blink-features=AutomationControlled',
-                '--start-maximized',
-                '--disable-infobars',
-                '--no-zygote',
-                '--no-first-run',
-                '--ignore-certificate-errors',
-                '--ignore-certificate-errors-spki-list',
-                '--disable-accelerated-2d-canvas',
-                '--hide-scrollbars',
-                '--disable-notifications',
-                '--disable-background-timer-throttling',
-                '--disable-backgrounding-occluded-windows',
-                '--disable-breakpad',
-                '--disable-component-extensions-with-background-pages',
-                '--disable-extensions',
-                '--disable-features=TranslateUI',
-                '--disable-ipc-flooding-protection',
-                '--disable-renderer-backgrounding',
-                '--enable-features=NetworkService,NetworkServiceInProcess'
-            ],
-            ignoreDefaultArgs: ["--enable-automation"]
+                '--start-maximized'
+            ]
         });
 
         const context = await browser.newContext({
@@ -63,30 +47,20 @@ async function scrapeBookmark(url, screenshotDir) {
             viewport: { width: 1080, height: 1920 },
             deviceScaleFactor: 1,
             isMobile: false, 
-            hasTouch: false,
             locale: 'en-IN', 
             timezoneId: 'Asia/Kolkata',
-            javaScriptEnabled: true,
-            acceptDownloads: false,
             extraHTTPHeaders: { 
                 'Accept-Language': 'en-US,en;q=0.9',
                 'Upgrade-Insecure-Requests': '1',
-                'Sec-Ch-Ua': '"Google Chrome";v="123", "Not:A-Brand";v="8", "Chromium";v="123"',
-                'Sec-Ch-Ua-Mobile': '?0',
-                'Sec-Ch-Ua-Platform': '"Windows"',
-                'Referer': 'https://www.google.com/'
+                'Referer': 'https://www.google.com/' 
             }
         });
 
+        // STEALTH: Hide automation indicators
         await context.addInitScript(() => {
             Object.defineProperty(navigator, 'webdriver', { get: () => undefined });
             Object.defineProperty(navigator, 'plugins', { get: () => [1, 2, 3, 4, 5] });
             Object.defineProperty(navigator, 'languages', { get: () => ['en-US', 'en'] });
-            window.chrome = { runtime: {} };
-            const originalQuery = window.navigator.permissions.query;
-            window.navigator.permissions.query = (parameters) => (
-                parameters.name === 'notifications' ? Promise.resolve({ state: Notification.permission }) : originalQuery(parameters)
-            );
         });
 
         const page = await context.newPage();
@@ -98,13 +72,7 @@ async function scrapeBookmark(url, screenshotDir) {
             console.warn(`   ⚠️ Navigation timeout. Proceeding.`); 
         }
         
-        try {
-            await page.mouse.move(100, 100);
-            await page.mouse.down();
-            await page.mouse.move(200, 200);
-            await page.mouse.up();
-        } catch(e) {}
-
+        // Anti-Popup
         const safeClick = async (selector) => {
             try {
                 const el = page.locator(selector).first();
@@ -112,15 +80,17 @@ async function scrapeBookmark(url, screenshotDir) {
             } catch (e) {}
         };
         await safeClick('button:has-text("Accept")');
+        await safeClick('button:has-text("Allow")');
         await safeClick('[aria-label="Close"]');
 
         try {
+            // Scroll Logic: Down to load images, Up to take screenshot
             await page.evaluate(async () => {
                 window.scrollTo(0, document.body.scrollHeight / 3);
                 await new Promise(r => setTimeout(r, 1000));
                 window.scrollTo(0, 0);
             });
-            await page.waitForTimeout(2000); 
+            await page.waitForTimeout(1500); 
         } catch (e) {}
 
         const fileName = `${Date.now()}_${Math.floor(Math.random()*1000)}.jpg`;
@@ -134,8 +104,12 @@ async function scrapeBookmark(url, screenshotDir) {
         const content = await page.content();
         const $ = cheerio.load(content);
         
-        data.title = $('h1').first().text().trim() || $('meta[property="og:title"]').attr('content') || $('title').text().trim() || data.site_name;
+        data.title = $('h1').first().text().trim() || 
+                     $('meta[property="og:title"]').attr('content') || 
+                     $('title').text().trim() || 
+                     data.site_name;
 
+        // Layer 1: JSON-LD
         $('script[type="application/ld+json"]').each((i, el) => {
             try {
                 const json = JSON.parse($(el).html());
@@ -151,12 +125,13 @@ async function scrapeBookmark(url, screenshotDir) {
             } catch (e) {}
         });
 
+        // Layer 2: Selectors
         if (!data.price) {
             const selectors = [
-                '.pdp-selling-price', '.pdp-price strong', '.pdp-price', 
-                '.a-price-whole', 
-                'div[class*="_30jeq3"]', 'div[class*="Nx9bqj"]', 
-                'h4', 
+                '.pdp-selling-price', '.pdp-price strong', '.pdp-price', // Myntra
+                '.a-price-whole', // Amazon
+                'div[class*="_30jeq3"]', 'div[class*="Nx9bqj"]', // Flipkart
+                'h4', // Meesho (generic header often used for price)
                 '[data-testid="price"]',
                 '.price', '[class*="price"]',
                 'span:contains("₹")', 'span:contains("Rs.")' 
@@ -167,10 +142,17 @@ async function scrapeBookmark(url, screenshotDir) {
                 for (let i = 0; i < elements.length; i++) {
                     const el = elements.eq(i);
                     const text = el.text();
+                    
                     const context = (el.parent().text() + el.parent().parent().text()).toLowerCase();
-                    if (context.includes('orders above') || context.includes('min purchase') || context.includes('save') || context.includes('off') || context.includes('coupon') || el.parents('.coupons, .offers').length > 0) {
+                    if (context.includes('orders above') || 
+                        context.includes('min purchase') || 
+                        context.includes('save') || 
+                        context.includes('off') ||
+                        context.includes('coupon') ||
+                        el.parents('.coupons, .offers').length > 0) {
                         continue; 
                     }
+
                     const result = parsePriceAndCurrency(text);
                     if (result.price) { 
                         data.price = result.price;
@@ -182,6 +164,7 @@ async function scrapeBookmark(url, screenshotDir) {
             }
         }
 
+        // Layer 3: Meta
         if (!data.price) {
             const metaPrice = $('meta[property="product:price:amount"]').attr('content') || $('meta[property="og:price:amount"]').attr('content');
             if (metaPrice) data.price = parseFloat(metaPrice);
@@ -189,6 +172,7 @@ async function scrapeBookmark(url, screenshotDir) {
             if (metaCurr) data.currency = metaCurr;
         }
 
+        // Layer 4: OCR Backup
         if (!data.price && data.imagePath) {
             console.log("   ⚠️ Standard scraping failed. Attempting OCR backup...");
             const absPath = path.resolve(screenshotDir, fileName);
@@ -207,6 +191,7 @@ async function scrapeBookmark(url, screenshotDir) {
     return data;
 }
 
+// Exported for On-Demand OCR
 async function scanImageForPrice(imageRelativePath, publicDir) {
     const fileName = path.basename(imageRelativePath);
     const absPath = path.join(publicDir, 'screenshots', fileName);
