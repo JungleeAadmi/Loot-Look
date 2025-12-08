@@ -4,7 +4,6 @@ const fs = require('fs');
 const path = require('path');
 const { extractPriceFromImage } = require('./ocr'); 
 
-// Desktop UA is better for Amazon to avoid mobile redirects/layouts that hide info
 const DESKTOP_UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123.0.0.0 Safari/537.36';
 
 const CURRENCY_MAP = {
@@ -28,26 +27,20 @@ async function scrapeBookmark(url, screenshotDir) {
         try { data.site_name = new URL(url).hostname.replace('www.', ''); } 
         catch (e) { data.site_name = 'Web'; }
 
-        // HEADFUL MODE: Critical for Amazon & Meesho Bot Detection
         browser = await chromium.launch({
-            headless: false, 
+            headless: false,
             args: [
-                '--no-sandbox', 
-                '--disable-setuid-sandbox', 
-                '--disable-dev-shm-usage', 
-                '--disable-gpu',
-                '--window-size=1280,1024', 
-                '--disable-blink-features=AutomationControlled',
+                '--no-sandbox', '--disable-setuid-sandbox', '--disable-dev-shm-usage', '--disable-gpu',
+                '--window-size=1080,1920', '--disable-blink-features=AutomationControlled',
                 '--start-maximized'
             ]
         });
 
         const context = await browser.newContext({
             userAgent: DESKTOP_UA,
-            viewport: { width: 1280, height: 1024 }, // Desktop size
+            viewport: { width: 1080, height: 1920 },
             deviceScaleFactor: 1,
             isMobile: false, 
-            hasTouch: false,
             locale: 'en-IN', 
             timezoneId: 'Asia/Kolkata',
             extraHTTPHeaders: { 
@@ -57,12 +50,10 @@ async function scrapeBookmark(url, screenshotDir) {
             }
         });
 
-        // STEALTH: Hide automation indicators
         await context.addInitScript(() => {
             Object.defineProperty(navigator, 'webdriver', { get: () => undefined });
             Object.defineProperty(navigator, 'plugins', { get: () => [1, 2, 3, 4, 5] });
             Object.defineProperty(navigator, 'languages', { get: () => ['en-US', 'en'] });
-            window.chrome = { runtime: {} };
         });
 
         const page = await context.newPage();
@@ -74,17 +65,36 @@ async function scrapeBookmark(url, screenshotDir) {
             console.warn(`   ⚠️ Navigation timeout. Proceeding.`); 
         }
         
-        // Anti-Popup
-        const safeClick = async (selector) => {
+        // --- SMART POPUP KILLER ---
+        const safeClick = async (pattern) => {
             try {
-                const el = page.locator(selector).first();
-                if (await el.isVisible({ timeout: 1000 })) await el.click({ timeout: 500 });
+                // Look for buttons or links matching the text pattern (case insensitive)
+                const el = page.locator(`button:text-matches("${pattern}", "i"), a:text-matches("${pattern}", "i"), div[role="button"]:text-matches("${pattern}", "i")`).first();
+                if (await el.isVisible({ timeout: 1500 })) {
+                    console.log(`   -> Clicking Popup: "${pattern}"`);
+                    await el.click({ timeout: 1000 });
+                    await page.waitForTimeout(1000); // Wait for animation/reload
+                }
             } catch (e) {}
         };
-        await safeClick('button:has-text("Accept")');
-        await safeClick('button:has-text("Close")');
-        // Specific Amazon Dismissal
-        await safeClick('#sp-cc-accept'); 
+
+        // Age Verification / Cookie Consent / Modals
+        await safeClick('Accept');
+        await safeClick('Allow');
+        await safeClick('Yes'); // Fix for "Are you over 21?"
+        await safeClick('I am over 18');
+        await safeClick('Enter Site');
+        await safeClick('Continue');
+        await safeClick('Agree');
+        await safeClick('Close');
+        await safeClick('No thanks');
+        
+        // Handle icon-only close buttons (X icon)
+        try {
+             const closeIcon = page.locator('[aria-label="Close"], [aria-label="close"], .close-icon, .modal-close').first();
+             if (await closeIcon.isVisible({ timeout: 1000 })) await closeIcon.click();
+        } catch(e) {}
+        // ---------------------------
 
         try {
             // Scroll Logic
@@ -107,13 +117,8 @@ async function scrapeBookmark(url, screenshotDir) {
         const content = await page.content();
         const $ = cheerio.load(content);
         
-        // TITLE STRATEGY: Prioritize Amazon's specific ID
-        data.title = $('#productTitle').text().trim() || 
-                     $('h1').first().text().trim() || 
-                     $('meta[property="og:title"]').attr('content') || 
-                     data.site_name;
+        data.title = $('h1').first().text().trim() || $('meta[property="og:title"]').attr('content') || $('title').text().trim() || data.site_name;
 
-        // Layer 1: JSON-LD
         $('script[type="application/ld+json"]').each((i, el) => {
             try {
                 const json = JSON.parse($(el).html());
@@ -129,19 +134,12 @@ async function scrapeBookmark(url, screenshotDir) {
             } catch (e) {}
         });
 
-        // Layer 2: Selectors
         if (!data.price) {
             const selectors = [
-                // Amazon Specifics (Highest Priority)
-                '.a-price .a-offscreen', // Hidden full price text (e.g. ₹1,499.00)
-                '#priceblock_ourprice',
-                '#priceblock_dealprice',
-                '.a-price-whole',       // Visual whole number
-
-                // Other Sites
-                '.pdp-selling-price', '.pdp-price strong', // Myntra
-                'div[class*="_30jeq3"]', 'div[class*="Nx9bqj"]', // Flipkart
-                'h4', // Meesho
+                '.pdp-selling-price', '.pdp-price strong', '.pdp-price', 
+                '.a-price-whole', 
+                'div[class*="_30jeq3"]', 'div[class*="Nx9bqj"]', 
+                'h4', 
                 '[data-testid="price"]',
                 '.price', '[class*="price"]',
                 'span:contains("₹")', 'span:contains("Rs.")' 
@@ -153,7 +151,6 @@ async function scrapeBookmark(url, screenshotDir) {
                     const el = elements.eq(i);
                     const text = el.text();
                     
-                    // Context Check
                     const context = (el.parent().text() + el.parent().parent().text()).toLowerCase();
                     if (context.includes('orders above') || 
                         context.includes('min purchase') || 
@@ -175,7 +172,6 @@ async function scrapeBookmark(url, screenshotDir) {
             }
         }
 
-        // Layer 3: Meta
         if (!data.price) {
             const metaPrice = $('meta[property="product:price:amount"]').attr('content') || $('meta[property="og:price:amount"]').attr('content');
             if (metaPrice) data.price = parseFloat(metaPrice);
@@ -183,7 +179,6 @@ async function scrapeBookmark(url, screenshotDir) {
             if (metaCurr) data.currency = metaCurr;
         }
 
-        // Layer 4: OCR Backup
         if (!data.price && data.imagePath) {
             console.log("   ⚠️ Standard scraping failed. Attempting OCR backup...");
             const absPath = path.resolve(screenshotDir, fileName);
