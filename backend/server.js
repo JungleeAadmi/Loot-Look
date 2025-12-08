@@ -138,7 +138,6 @@ app.post('/api/bookmarks/:id/share', authenticateToken, async (req, res) => {
 
         await pool.query('INSERT INTO shared_bookmarks (bookmark_id, sender_id, receiver_id) VALUES ($1, $2, $3) ON CONFLICT DO NOTHING', [req.params.id, req.user.id, receiverId]);
 
-        // Notify Receiver
         const receiverRes = await pool.query('SELECT ntfy_url, ntfy_topic, notify_enabled, notify_on_share FROM users WHERE id = $1', [receiverId]);
         if (receiverRes.rows.length > 0) {
             const receiver = receiverRes.rows[0];
