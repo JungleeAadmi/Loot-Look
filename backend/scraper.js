@@ -4,7 +4,6 @@ const fs = require('fs');
 const path = require('path');
 const { extractPriceFromImage } = require('./ocr'); 
 
-// Standard Windows Desktop Chrome UA
 const DESKTOP_UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36';
 
 const CURRENCY_MAP = {
@@ -28,17 +27,11 @@ async function scrapeBookmark(url, screenshotDir) {
         try { data.site_name = new URL(url).hostname.replace('www.', ''); } 
         catch (e) { data.site_name = 'Web'; }
 
-        // HEADFUL MODE (Critical for Meesho/Myntra)
         browser = await chromium.launch({
-            headless: false, // Run visible (hidden inside Xvfb)
+            headless: false,
             args: [
-                '--no-sandbox', 
-                '--disable-setuid-sandbox', 
-                '--disable-dev-shm-usage', 
-                '--disable-gpu',
-                '--window-size=1080,1920', 
-                '--disable-blink-features=AutomationControlled',
-                '--start-maximized'
+                '--no-sandbox', '--disable-setuid-sandbox', '--disable-dev-shm-usage', '--disable-gpu',
+                '--window-size=1080,1920', '--disable-blink-features=AutomationControlled'
             ]
         });
 
@@ -47,30 +40,18 @@ async function scrapeBookmark(url, screenshotDir) {
             viewport: { width: 1080, height: 1920 },
             deviceScaleFactor: 1,
             isMobile: false, 
-            locale: 'en-IN', 
-            timezoneId: 'Asia/Kolkata',
-            extraHTTPHeaders: { 
-                'Accept-Language': 'en-US,en;q=0.9',
-                'Upgrade-Insecure-Requests': '1',
-                'Referer': 'https://www.google.com/' 
-            }
+            locale: 'en-IN', timezoneId: 'Asia/Kolkata',
+            extraHTTPHeaders: { 'Accept-Language': 'en-US,en;q=0.9' }
         });
 
-        // STEALTH: Hide automation indicators
-        await context.addInitScript(() => {
-            Object.defineProperty(navigator, 'webdriver', { get: () => undefined });
-            Object.defineProperty(navigator, 'plugins', { get: () => [1, 2, 3, 4, 5] });
-            Object.defineProperty(navigator, 'languages', { get: () => ['en-US', 'en'] });
-        });
+        await context.addInitScript(() => { Object.defineProperty(navigator, 'webdriver', { get: () => undefined }); });
 
         const page = await context.newPage();
 
         try {
             console.log(`   -> Navigating to ${url}...`);
             await page.goto(url, { waitUntil: 'domcontentloaded', timeout: 60000 });
-        } catch (navError) { 
-            console.warn(`   ⚠️ Navigation timeout. Proceeding.`); 
-        }
+        } catch (navError) { console.warn(`   ⚠️ Navigation timeout. Proceeding.`); }
         
         // Anti-Popup
         const safeClick = async (selector) => {
@@ -80,19 +61,31 @@ async function scrapeBookmark(url, screenshotDir) {
             } catch (e) {}
         };
         await safeClick('button:has-text("Accept")');
-        await safeClick('button:has-text("Allow")');
         await safeClick('[aria-label="Close"]');
 
+        // --- SMART WAIT (The Fix) ---
+        // Explicitly wait for price elements on known sites to ensure they render
         try {
-            // Scroll Logic: Down to load images, Up to take screenshot
+            const waitSelectors = ['h1', 'img'];
+            if (url.includes('myntra')) waitSelectors.push('.pdp-price', '.pdp-selling-price');
+            if (url.includes('flipkart')) waitSelectors.push('div[class*="_30jeq3"]', 'div[class*="Nx9bqj"]');
+            if (url.includes('amazon')) waitSelectors.push('.a-price-whole');
+
+            await Promise.race([
+                ...waitSelectors.map(s => page.waitForSelector(s, { timeout: 5000 }).catch(()=>{})),
+                new Promise(r => setTimeout(r, 2000))
+            ]);
+
+            // Scroll to force lazy loads
             await page.evaluate(async () => {
                 window.scrollTo(0, document.body.scrollHeight / 3);
                 await new Promise(r => setTimeout(r, 1000));
                 window.scrollTo(0, 0);
             });
-            await page.waitForTimeout(1500); 
+            await page.waitForTimeout(1000); 
         } catch (e) {}
 
+        // Screenshot
         const fileName = `${Date.now()}_${Math.floor(Math.random()*1000)}.jpg`;
         const filePath = path.join(screenshotDir, fileName);
         if (!fs.existsSync(screenshotDir)) fs.mkdirSync(screenshotDir, { recursive: true });
@@ -104,10 +97,7 @@ async function scrapeBookmark(url, screenshotDir) {
         const content = await page.content();
         const $ = cheerio.load(content);
         
-        data.title = $('h1').first().text().trim() || 
-                     $('meta[property="og:title"]').attr('content') || 
-                     $('title').text().trim() || 
-                     data.site_name;
+        data.title = $('h1').first().text().trim() || $('meta[property="og:title"]').attr('content') || $('title').text().trim() || data.site_name;
 
         // Layer 1: JSON-LD
         $('script[type="application/ld+json"]').each((i, el) => {
@@ -125,42 +115,43 @@ async function scrapeBookmark(url, screenshotDir) {
             } catch (e) {}
         });
 
-        // Layer 2: Selectors
+        // Layer 2: Selectors (Prioritized)
         if (!data.price) {
             const selectors = [
-                '.pdp-selling-price', '.pdp-price strong', '.pdp-price', // Myntra
-                '.a-price-whole', // Amazon
-                'div[class*="_30jeq3"]', 'div[class*="Nx9bqj"]', // Flipkart
-                'h4', // Meesho (generic header often used for price)
+                '.pdp-selling-price',       // Myntra Main
+                '.pdp-price strong',        // Myntra Backup
+                '.a-price-whole',           // Amazon
+                'div[class*="_30jeq3"]',    // Flipkart
+                'div[class*="Nx9bqj"]',     // Flipkart New
+                'h4:contains("₹")',         // Meesho
                 '[data-testid="price"]',
                 '.price', '[class*="price"]',
-                'span:contains("₹")', 'span:contains("Rs.")' 
+                // Generic catch-alls at the bottom
+                'span:contains("₹")',
+                'span:contains("Rs.")' 
             ];
 
             for (const sel of selectors) {
-                const elements = $(sel);
-                for (let i = 0; i < elements.length; i++) {
-                    const el = elements.eq(i);
-                    const text = el.text();
-                    
-                    const context = (el.parent().text() + el.parent().parent().text()).toLowerCase();
-                    if (context.includes('orders above') || 
-                        context.includes('min purchase') || 
-                        context.includes('save') || 
-                        context.includes('off') ||
-                        context.includes('coupon') ||
-                        el.parents('.coupons, .offers').length > 0) {
-                        continue; 
-                    }
-
-                    const result = parsePriceAndCurrency(text);
-                    if (result.price) { 
-                        data.price = result.price;
-                        if (result.currency) data.currency = result.currency;
-                        break; 
-                    }
+                // Get element
+                const el = $(sel).first();
+                const text = el.text();
+                
+                // --- CONTEXT CHECK (The Fix for "Orders above 300") ---
+                // If the text or its parent contains invalid keywords, skip it.
+                const context = (el.parent().text() + text).toLowerCase();
+                if (context.includes('orders above') || 
+                    context.includes('min purchase') || 
+                    context.includes('save') ||
+                    context.includes('off')) {
+                    continue; // Skip this "price", it's an offer
                 }
-                if (data.price) break; 
+
+                const result = parsePriceAndCurrency(text);
+                if (result.price) { 
+                    data.price = result.price;
+                    if (result.currency) data.currency = result.currency;
+                    break; 
+                }
             }
         }
 
@@ -191,7 +182,6 @@ async function scrapeBookmark(url, screenshotDir) {
     return data;
 }
 
-// Exported for On-Demand OCR
 async function scanImageForPrice(imageRelativePath, publicDir) {
     const fileName = path.basename(imageRelativePath);
     const absPath = path.join(publicDir, 'screenshots', fileName);
