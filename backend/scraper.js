@@ -4,8 +4,8 @@ const fs = require('fs');
 const path = require('path');
 const { extractPriceFromImage } = require('./ocr'); 
 
-// Standard Windows Desktop Chrome UA
-const DESKTOP_UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36';
+// Standard Windows Desktop Chrome UA - Updated to a very common one
+const DESKTOP_UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36';
 
 const CURRENCY_MAP = {
     '$': 'USD', '€': 'EUR', '£': 'GBP', '¥': 'JPY', '₹': 'INR', 'Rs': 'INR', 'RP': 'IDR', 'RM': 'MYR', 'AED': 'AED'
@@ -58,10 +58,8 @@ async function scrapeBookmark(url, screenshotDir) {
             extraHTTPHeaders: { 
                 'Accept-Language': 'en-US,en;q=0.9',
                 'Upgrade-Insecure-Requests': '1',
-                'Sec-Ch-Ua': '"Not A(Brand";v="99", "Google Chrome";v="121", "Chromium";v="121"',
-                'Sec-Ch-Ua-Mobile': '?0',
-                'Sec-Ch-Ua-Platform': '"Windows"',
-                'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7'
+                // Fake referer to look like we came from Google search
+                'Referer': 'https://www.google.com/' 
             }
         });
 
@@ -70,13 +68,14 @@ async function scrapeBookmark(url, screenshotDir) {
             // 1. Pass WebDriver Check
             Object.defineProperty(navigator, 'webdriver', { get: () => undefined });
             
-            // 2. Pass Platform Check (Must match User Agent)
+            // 2. Pass Platform Check (Must match User Agent - Win32 for Windows UA)
             Object.defineProperty(navigator, 'platform', { get: () => 'Win32' });
 
             // 3. Mock Languages
             Object.defineProperty(navigator, 'languages', { get: () => ['en-US', 'en'] });
 
             // 4. Mock Plugins (Chrome usually has 5 PDF/NaCl plugins)
+            // This is a basic mock. More complex sites check individual plugins.
             Object.defineProperty(navigator, 'plugins', { get: () => [1, 2, 3, 4, 5] });
 
             // 5. Mock Permissions API
@@ -102,6 +101,8 @@ async function scrapeBookmark(url, screenshotDir) {
 
         try {
             console.log(`   -> Navigating to ${url}...`);
+            // Increased timeout and set generic waitUntil to avoid hanging on ads
+            // 'domcontentloaded' is faster and less prone to timeout than 'networkidle'
             await page.goto(url, { waitUntil: 'domcontentloaded', timeout: 60000 });
         } catch (navError) { 
             console.warn(`   ⚠️ Navigation timeout. Proceeding.`); 
@@ -174,7 +175,7 @@ async function scrapeBookmark(url, screenshotDir) {
                 '.pdp-selling-price', '.pdp-price strong', '.pdp-price', // Myntra
                 '.a-price-whole', // Amazon
                 'div[class*="_30jeq3"]', 'div[class*="Nx9bqj"]', // Flipkart
-                'h4', // Meesho
+                'h4', // Meesho (generic header often used for price)
                 '[data-testid="price"]',
                 '.price', '[class*="price"]',
                 'span:contains("₹")', 'span:contains("Rs.")' 
