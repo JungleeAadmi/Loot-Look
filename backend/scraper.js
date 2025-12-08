@@ -4,7 +4,7 @@ const fs = require('fs');
 const path = require('path');
 const { extractPriceFromImage } = require('./ocr'); 
 
-// Standard Windows Desktop Chrome UA
+// Desktop UA is better for Amazon to avoid mobile redirects/layouts that hide info
 const DESKTOP_UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123.0.0.0 Safari/537.36';
 
 const CURRENCY_MAP = {
@@ -28,15 +28,15 @@ async function scrapeBookmark(url, screenshotDir) {
         try { data.site_name = new URL(url).hostname.replace('www.', ''); } 
         catch (e) { data.site_name = 'Web'; }
 
-        // HEADFUL MODE (Critical for Meesho/Myntra)
+        // HEADFUL MODE: Critical for Amazon & Meesho Bot Detection
         browser = await chromium.launch({
-            headless: false, // Run visible (hidden inside Xvfb)
+            headless: false, 
             args: [
                 '--no-sandbox', 
                 '--disable-setuid-sandbox', 
                 '--disable-dev-shm-usage', 
                 '--disable-gpu',
-                '--window-size=1080,1920', 
+                '--window-size=1280,1024', 
                 '--disable-blink-features=AutomationControlled',
                 '--start-maximized'
             ]
@@ -44,9 +44,10 @@ async function scrapeBookmark(url, screenshotDir) {
 
         const context = await browser.newContext({
             userAgent: DESKTOP_UA,
-            viewport: { width: 1080, height: 1920 },
+            viewport: { width: 1280, height: 1024 }, // Desktop size
             deviceScaleFactor: 1,
             isMobile: false, 
+            hasTouch: false,
             locale: 'en-IN', 
             timezoneId: 'Asia/Kolkata',
             extraHTTPHeaders: { 
@@ -61,6 +62,7 @@ async function scrapeBookmark(url, screenshotDir) {
             Object.defineProperty(navigator, 'webdriver', { get: () => undefined });
             Object.defineProperty(navigator, 'plugins', { get: () => [1, 2, 3, 4, 5] });
             Object.defineProperty(navigator, 'languages', { get: () => ['en-US', 'en'] });
+            window.chrome = { runtime: {} };
         });
 
         const page = await context.newPage();
@@ -80,11 +82,12 @@ async function scrapeBookmark(url, screenshotDir) {
             } catch (e) {}
         };
         await safeClick('button:has-text("Accept")');
-        await safeClick('button:has-text("Allow")');
-        await safeClick('[aria-label="Close"]');
+        await safeClick('button:has-text("Close")');
+        // Specific Amazon Dismissal
+        await safeClick('#sp-cc-accept'); 
 
         try {
-            // Scroll Logic: Down to load images, Up to take screenshot
+            // Scroll Logic
             await page.evaluate(async () => {
                 window.scrollTo(0, document.body.scrollHeight / 3);
                 await new Promise(r => setTimeout(r, 1000));
@@ -104,9 +107,10 @@ async function scrapeBookmark(url, screenshotDir) {
         const content = await page.content();
         const $ = cheerio.load(content);
         
-        data.title = $('h1').first().text().trim() || 
+        // TITLE STRATEGY: Prioritize Amazon's specific ID
+        data.title = $('#productTitle').text().trim() || 
+                     $('h1').first().text().trim() || 
                      $('meta[property="og:title"]').attr('content') || 
-                     $('title').text().trim() || 
                      data.site_name;
 
         // Layer 1: JSON-LD
@@ -128,10 +132,16 @@ async function scrapeBookmark(url, screenshotDir) {
         // Layer 2: Selectors
         if (!data.price) {
             const selectors = [
-                '.pdp-selling-price', '.pdp-price strong', '.pdp-price', // Myntra
-                '.a-price-whole', // Amazon
+                // Amazon Specifics (Highest Priority)
+                '.a-price .a-offscreen', // Hidden full price text (e.g. ₹1,499.00)
+                '#priceblock_ourprice',
+                '#priceblock_dealprice',
+                '.a-price-whole',       // Visual whole number
+
+                // Other Sites
+                '.pdp-selling-price', '.pdp-price strong', // Myntra
                 'div[class*="_30jeq3"]', 'div[class*="Nx9bqj"]', // Flipkart
-                'h4', // Meesho (generic header often used for price)
+                'h4', // Meesho
                 '[data-testid="price"]',
                 '.price', '[class*="price"]',
                 'span:contains("₹")', 'span:contains("Rs.")' 
@@ -143,6 +153,7 @@ async function scrapeBookmark(url, screenshotDir) {
                     const el = elements.eq(i);
                     const text = el.text();
                     
+                    // Context Check
                     const context = (el.parent().text() + el.parent().parent().text()).toLowerCase();
                     if (context.includes('orders above') || 
                         context.includes('min purchase') || 
