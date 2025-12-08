@@ -4,6 +4,7 @@ const fs = require('fs');
 const path = require('path');
 const { extractPriceFromImage } = require('./ocr'); 
 
+// Standard Windows Desktop Chrome UA
 const DESKTOP_UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36';
 
 const CURRENCY_MAP = {
@@ -28,10 +29,15 @@ async function scrapeBookmark(url, screenshotDir) {
         catch (e) { data.site_name = 'Web'; }
 
         browser = await chromium.launch({
-            headless: false,
+            headless: false, // Running headful via Xvfb
             args: [
-                '--no-sandbox', '--disable-setuid-sandbox', '--disable-dev-shm-usage', '--disable-gpu',
-                '--window-size=1080,1920', '--disable-blink-features=AutomationControlled'
+                '--no-sandbox', 
+                '--disable-setuid-sandbox', 
+                '--disable-dev-shm-usage', 
+                '--disable-gpu',
+                '--window-size=1080,1920', 
+                '--disable-blink-features=AutomationControlled', // Critical
+                '--start-maximized'
             ]
         });
 
@@ -41,15 +47,29 @@ async function scrapeBookmark(url, screenshotDir) {
             deviceScaleFactor: 1,
             isMobile: false, 
             locale: 'en-IN', timezoneId: 'Asia/Kolkata',
-            extraHTTPHeaders: { 'Accept-Language': 'en-US,en;q=0.9' }
+            extraHTTPHeaders: { 
+                'Accept-Language': 'en-US,en;q=0.9',
+                'Upgrade-Insecure-Requests': '1',
+                // Fake referer to look like we came from Google
+                'Referer': 'https://www.google.com/' 
+            }
         });
 
-        await context.addInitScript(() => { Object.defineProperty(navigator, 'webdriver', { get: () => undefined }); });
+        // --- STEALTH SCRIPTS ---
+        // Hide WebDriver and other automation indicators
+        await context.addInitScript(() => {
+            Object.defineProperty(navigator, 'webdriver', { get: () => undefined });
+            // Fake plugins to look like a real browser
+            Object.defineProperty(navigator, 'plugins', { get: () => [1, 2, 3, 4, 5] });
+            // Fake languages
+            Object.defineProperty(navigator, 'languages', { get: () => ['en-US', 'en'] });
+        });
 
         const page = await context.newPage();
 
         try {
             console.log(`   -> Navigating to ${url}...`);
+            // Increased timeout and set generic waitUntil to avoid hanging on ads
             await page.goto(url, { waitUntil: 'domcontentloaded', timeout: 60000 });
         } catch (navError) { console.warn(`   ⚠️ Navigation timeout. Proceeding.`); }
         
@@ -63,20 +83,18 @@ async function scrapeBookmark(url, screenshotDir) {
         await safeClick('button:has-text("Accept")');
         await safeClick('[aria-label="Close"]');
 
-        // --- SMART WAIT (The Fix) ---
-        // Explicitly wait for price elements on known sites to ensure they render
         try {
             const waitSelectors = ['h1', 'img'];
             if (url.includes('myntra')) waitSelectors.push('.pdp-price', '.pdp-selling-price');
             if (url.includes('flipkart')) waitSelectors.push('div[class*="_30jeq3"]', 'div[class*="Nx9bqj"]');
             if (url.includes('amazon')) waitSelectors.push('.a-price-whole');
 
+            // Wait for selector or generic timeout
             await Promise.race([
                 ...waitSelectors.map(s => page.waitForSelector(s, { timeout: 5000 }).catch(()=>{})),
                 new Promise(r => setTimeout(r, 2000))
             ]);
 
-            // Scroll to force lazy loads
             await page.evaluate(async () => {
                 window.scrollTo(0, document.body.scrollHeight / 3);
                 await new Promise(r => setTimeout(r, 1000));
@@ -85,7 +103,6 @@ async function scrapeBookmark(url, screenshotDir) {
             await page.waitForTimeout(1000); 
         } catch (e) {}
 
-        // Screenshot
         const fileName = `${Date.now()}_${Math.floor(Math.random()*1000)}.jpg`;
         const filePath = path.join(screenshotDir, fileName);
         if (!fs.existsSync(screenshotDir)) fs.mkdirSync(screenshotDir, { recursive: true });
@@ -115,43 +132,42 @@ async function scrapeBookmark(url, screenshotDir) {
             } catch (e) {}
         });
 
-        // Layer 2: Selectors (Prioritized)
+        // Layer 2: Selectors
         if (!data.price) {
             const selectors = [
-                '.pdp-selling-price',       // Myntra Main
-                '.pdp-price strong',        // Myntra Backup
-                '.a-price-whole',           // Amazon
-                'div[class*="_30jeq3"]',    // Flipkart
-                'div[class*="Nx9bqj"]',     // Flipkart New
-                'h4:contains("₹")',         // Meesho
+                '.pdp-selling-price', '.pdp-price strong', '.pdp-price', // Myntra
+                '.a-price-whole', // Amazon
+                'div[class*="_30jeq3"]', 'div[class*="Nx9bqj"]', // Flipkart
+                'h4', // Meesho (generic header often used for price)
                 '[data-testid="price"]',
                 '.price', '[class*="price"]',
-                // Generic catch-alls at the bottom
-                'span:contains("₹")',
-                'span:contains("Rs.")' 
+                'span:contains("₹")', 'span:contains("Rs.")' 
             ];
 
             for (const sel of selectors) {
-                // Get element
-                const el = $(sel).first();
-                const text = el.text();
-                
-                // --- CONTEXT CHECK (The Fix for "Orders above 300") ---
-                // If the text or its parent contains invalid keywords, skip it.
-                const context = (el.parent().text() + text).toLowerCase();
-                if (context.includes('orders above') || 
-                    context.includes('min purchase') || 
-                    context.includes('save') ||
-                    context.includes('off')) {
-                    continue; // Skip this "price", it's an offer
-                }
+                const elements = $(sel);
+                for (let i = 0; i < elements.length; i++) {
+                    const el = elements.eq(i);
+                    const text = el.text();
+                    
+                    const context = (el.parent().text() + el.parent().parent().text()).toLowerCase();
+                    if (context.includes('orders above') || 
+                        context.includes('min purchase') || 
+                        context.includes('save') || 
+                        context.includes('off') ||
+                        context.includes('coupon') ||
+                        el.parents('.coupons, .offers').length > 0) {
+                        continue; 
+                    }
 
-                const result = parsePriceAndCurrency(text);
-                if (result.price) { 
-                    data.price = result.price;
-                    if (result.currency) data.currency = result.currency;
-                    break; 
+                    const result = parsePriceAndCurrency(text);
+                    if (result.price) { 
+                        data.price = result.price;
+                        if (result.currency) data.currency = result.currency;
+                        break; 
+                    }
                 }
+                if (data.price) break; 
             }
         }
 
