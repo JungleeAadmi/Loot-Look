@@ -43,7 +43,7 @@ async function scrapeBookmark(url, screenshotDir) {
                 '--disable-setuid-sandbox', 
                 '--disable-dev-shm-usage', 
                 '--disable-gpu',
-                '--window-size=1920,1080', // 1080p Monitor Window
+                '--window-size=1080,1920', // 1080p Monitor Window
                 '--disable-blink-features=AutomationControlled',
                 '--start-maximized'
             ]
@@ -51,7 +51,7 @@ async function scrapeBookmark(url, screenshotDir) {
 
         const context = await browser.newContext({
             userAgent: DESKTOP_UA,
-            viewport: { width: 1920, height: 1080 }, // 1080p Monitor Resolution
+            viewport: { width: 1080, height: 1920 }, // 1080p Monitor Resolution
             deviceScaleFactor: 1, // Standard Monitor
             isMobile: false, 
             hasTouch: false,
