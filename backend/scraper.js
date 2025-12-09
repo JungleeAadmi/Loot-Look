@@ -172,12 +172,13 @@ async function scrapeBookmark(url, screenshotDir) {
                     if (context.includes('orders above') || 
                         context.includes('min purchase') || 
                         context.includes('save') || 
-                        context.includes('off') ||
+                        context.includes('off') || 
                         context.includes('coupon') ||
                         el.parents('.coupons, .offers').length > 0) {
                         continue; 
                     }
 
+                    // THIS WAS CRASHING BEFORE because the function wasn't defined
                     const result = parsePriceAndCurrency(text);
                     if (result.price) { 
                         data.price = result.price;
@@ -224,7 +225,7 @@ async function scanImageForPrice(imageRelativePath, publicDir) {
     return await extractPriceFromImage(absPath);
 }
 
-// THIS WAS MISSING - ADDED BACK
+// --- MISSING HELPER FUNCTION (Restored) ---
 function parsePriceAndCurrency(text) {
     if (!text) return { price: null, currency: null };
     let currency = null;
