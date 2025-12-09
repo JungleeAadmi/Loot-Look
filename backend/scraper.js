@@ -224,6 +224,7 @@ async function scanImageForPrice(imageRelativePath, publicDir) {
     return await extractPriceFromImage(absPath);
 }
 
+// THIS WAS MISSING - ADDED BACK
 function parsePriceAndCurrency(text) {
     if (!text) return { price: null, currency: null };
     let currency = null;
