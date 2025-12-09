@@ -4,8 +4,7 @@ const fs = require('fs');
 const path = require('path');
 const { extractPriceFromImage } = require('./ocr'); 
 
-// Standard Windows Desktop Chrome UA - Updated to a very common one
-const DESKTOP_UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36';
+const DESKTOP_UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123.0.0.0 Safari/537.36';
 
 const CURRENCY_MAP = {
     '$': 'USD', '€': 'EUR', '£': 'GBP', '¥': 'JPY', '₹': 'INR', 'Rs': 'INR', 'RP': 'IDR', 'RM': 'MYR', 'AED': 'AED'
@@ -28,28 +27,23 @@ async function scrapeBookmark(url, screenshotDir) {
         try { data.site_name = new URL(url).hostname.replace('www.', ''); } 
         catch (e) { data.site_name = 'Web'; }
 
+        // HEADFUL MODE: Critical for Amazon & Meesho Bot Detection
         browser = await chromium.launch({
-            headless: false, // Headful via Xvfb
+            headless: false, 
             args: [
                 '--no-sandbox', 
                 '--disable-setuid-sandbox', 
                 '--disable-dev-shm-usage', 
                 '--disable-gpu',
-                '--window-size=1920,1080', 
-                '--disable-blink-features=AutomationControlled', // Critical
-                '--start-maximized',
-                '--disable-infobars',
-                '--exclude-switches=enable-automation',
-                '--use-fake-ui-for-media-stream',
-                '--use-fake-device-for-media-stream',
-                '--enable-features=NetworkService,NetworkServiceInProcess'
-            ],
-            ignoreDefaultArgs: ["--enable-automation"]
+                '--window-size=1080,1920', 
+                '--disable-blink-features=AutomationControlled',
+                '--start-maximized'
+            ]
         });
 
         const context = await browser.newContext({
             userAgent: DESKTOP_UA,
-            viewport: { width: 1920, height: 1080 },
+            viewport: { width: 1080, height: 1920 },
             deviceScaleFactor: 1,
             isMobile: false, 
             hasTouch: false,
@@ -58,51 +52,22 @@ async function scrapeBookmark(url, screenshotDir) {
             extraHTTPHeaders: { 
                 'Accept-Language': 'en-US,en;q=0.9',
                 'Upgrade-Insecure-Requests': '1',
-                // Fake referer to look like we came from Google search
                 'Referer': 'https://www.google.com/' 
             }
         });
 
-        // --- ADVANCED STEALTH INJECTION ---
+        // STEALTH: Hide automation indicators
         await context.addInitScript(() => {
-            // 1. Pass WebDriver Check
             Object.defineProperty(navigator, 'webdriver', { get: () => undefined });
-            
-            // 2. Pass Platform Check (Must match User Agent - Win32 for Windows UA)
-            Object.defineProperty(navigator, 'platform', { get: () => 'Win32' });
-
-            // 3. Mock Languages
-            Object.defineProperty(navigator, 'languages', { get: () => ['en-US', 'en'] });
-
-            // 4. Mock Plugins (Chrome usually has 5 PDF/NaCl plugins)
-            // This is a basic mock. More complex sites check individual plugins.
             Object.defineProperty(navigator, 'plugins', { get: () => [1, 2, 3, 4, 5] });
-
-            // 5. Mock Permissions API
-            const originalQuery = window.navigator.permissions.query;
-            window.navigator.permissions.query = (parameters) => (
-                parameters.name === 'notifications' ?
-                    Promise.resolve({ state: Notification.permission }) :
-                    originalQuery(parameters)
-            );
-            
-            // 6. WebGL Vendor Spoofing (Optional but good)
-            const getParameter = WebGLRenderingContext.prototype.getParameter;
-            WebGLRenderingContext.prototype.getParameter = function(parameter) {
-                // UNMASKED_VENDOR_WEBGL
-                if (parameter === 37445) return 'Intel Inc.';
-                // UNMASKED_RENDERER_WEBGL
-                if (parameter === 37446) return 'Intel Iris OpenGL Engine';
-                return getParameter(parameter);
-            };
+            Object.defineProperty(navigator, 'languages', { get: () => ['en-US', 'en'] });
+            window.chrome = { runtime: {} };
         });
 
         const page = await context.newPage();
 
         try {
             console.log(`   -> Navigating to ${url}...`);
-            // Increased timeout and set generic waitUntil to avoid hanging on ads
-            // 'domcontentloaded' is faster and less prone to timeout than 'networkidle'
             await page.goto(url, { waitUntil: 'domcontentloaded', timeout: 60000 });
         } catch (navError) { 
             console.warn(`   ⚠️ Navigation timeout. Proceeding.`); 
@@ -116,28 +81,17 @@ async function scrapeBookmark(url, screenshotDir) {
             } catch (e) {}
         };
         await safeClick('button:has-text("Accept")');
-        await safeClick('[aria-label="Close"]');
+        await safeClick('button:has-text("Close")');
+        await safeClick('#sp-cc-accept'); // Amazon specific
 
         try {
-            // Smart Wait for Content
-            const waitSelectors = ['h1', 'img'];
-            if (url.includes('myntra')) waitSelectors.push('.pdp-price', '.pdp-selling-price');
-            if (url.includes('flipkart')) waitSelectors.push('div[class*="_30jeq3"]', 'div[class*="Nx9bqj"]');
-            if (url.includes('amazon')) waitSelectors.push('.a-price-whole');
-            if (url.includes('meesho')) waitSelectors.push('h4');
-
-            await Promise.race([
-                ...waitSelectors.map(s => page.waitForSelector(s, { timeout: 5000 }).catch(()=>{})),
-                new Promise(r => setTimeout(r, 2000))
-            ]);
-
             // Scroll Logic
             await page.evaluate(async () => {
                 window.scrollTo(0, document.body.scrollHeight / 3);
                 await new Promise(r => setTimeout(r, 1000));
                 window.scrollTo(0, 0);
             });
-            await page.waitForTimeout(1000); 
+            await page.waitForTimeout(1500); 
         } catch (e) {}
 
         const fileName = `${Date.now()}_${Math.floor(Math.random()*1000)}.jpg`;
@@ -151,7 +105,27 @@ async function scrapeBookmark(url, screenshotDir) {
         const content = await page.content();
         const $ = cheerio.load(content);
         
-        data.title = $('h1').first().text().trim() || $('meta[property="og:title"]').attr('content') || $('title').text().trim() || data.site_name;
+        // --- TITLE EXTRACTION FIX ---
+        // Prioritize specific IDs before falling back to generic H1
+        const titleSelectors = [
+            '#productTitle',        // Amazon
+            'h1.yhB1nd',            // Flipkart
+            '.pdp-title',           // Myntra
+            'h1.pdp-name',          // Myntra Mobile
+            'h1'                    // Generic
+        ];
+
+        for (const sel of titleSelectors) {
+            const t = $(sel).first().text().trim();
+            if (t && t.length > 5) {
+                data.title = t;
+                break;
+            }
+        }
+        
+        if (!data.title || data.title === 'New Bookmark') {
+            data.title = $('meta[property="og:title"]').attr('content') || data.site_name;
+        }
 
         // Layer 1: JSON-LD
         $('script[type="application/ld+json"]').each((i, el) => {
@@ -172,10 +146,16 @@ async function scrapeBookmark(url, screenshotDir) {
         // Layer 2: Selectors
         if (!data.price) {
             const selectors = [
-                '.pdp-selling-price', '.pdp-price strong', '.pdp-price', // Myntra
-                '.a-price-whole', // Amazon
+                // Amazon Specifics (Highest Priority)
+                '.a-price .a-offscreen', // Hidden full price text (e.g. ₹1,499.00)
+                '#priceblock_ourprice',
+                '#priceblock_dealprice',
+                '.a-price-whole',       // Visual whole number
+
+                // Other Sites
+                '.pdp-selling-price', '.pdp-price strong', // Myntra
                 'div[class*="_30jeq3"]', 'div[class*="Nx9bqj"]', // Flipkart
-                'h4', // Meesho (generic header often used for price)
+                'h4', // Meesho
                 '[data-testid="price"]',
                 '.price', '[class*="price"]',
                 'span:contains("₹")', 'span:contains("Rs.")' 
@@ -187,11 +167,12 @@ async function scrapeBookmark(url, screenshotDir) {
                     const el = elements.eq(i);
                     const text = el.text();
                     
+                    // Context Check
                     const context = (el.parent().text() + el.parent().parent().text()).toLowerCase();
                     if (context.includes('orders above') || 
                         context.includes('min purchase') || 
                         context.includes('save') || 
-                        context.includes('off') || 
+                        context.includes('off') ||
                         context.includes('coupon') ||
                         el.parents('.coupons, .offers').length > 0) {
                         continue; 
@@ -235,6 +216,7 @@ async function scrapeBookmark(url, screenshotDir) {
     return data;
 }
 
+// Exported for On-Demand OCR
 async function scanImageForPrice(imageRelativePath, publicDir) {
     const fileName = path.basename(imageRelativePath);
     const absPath = path.join(publicDir, 'screenshots', fileName);
