@@ -4,9 +4,7 @@ const fs = require('fs');
 const path = require('path');
 const { extractPriceFromImage } = require('./ocr'); 
 
-// Mobile User Agent (Pixel 7) - Matches your 1080x1920 resolution perfectly
-// This prevents "White Screen" on mobile-optimized sites like Meesho
-const MOBILE_UA = 'Mozilla/5.0 (Linux; Android 13; Pixel 7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/116.0.0.0 Mobile Safari/537.36';
+const DESKTOP_UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123.0.0.0 Safari/537.36';
 
 const CURRENCY_MAP = {
     '$': 'USD', '€': 'EUR', '£': 'GBP', '¥': 'JPY', '₹': 'INR', 'Rs': 'INR', 'RP': 'IDR', 'RM': 'MYR', 'AED': 'AED'
@@ -29,7 +27,7 @@ async function scrapeBookmark(url, screenshotDir) {
         try { data.site_name = new URL(url).hostname.replace('www.', ''); } 
         catch (e) { data.site_name = 'Web'; }
 
-        // HEADFUL MODE + MOBILE EMULATION
+        // HEADFUL MODE: Critical for Amazon & Meesho Bot Detection
         browser = await chromium.launch({
             headless: false, 
             args: [
@@ -44,11 +42,11 @@ async function scrapeBookmark(url, screenshotDir) {
         });
 
         const context = await browser.newContext({
-            userAgent: MOBILE_UA,
-            viewport: { width: 1080, height: 1920 }, // Matches UA now
-            deviceScaleFactor: 2.625, // Pixel 7 density
-            isMobile: true, // Native mobile emulation
-            hasTouch: true,
+            userAgent: DESKTOP_UA,
+            viewport: { width: 1080, height: 1920 },
+            deviceScaleFactor: 1,
+            isMobile: false, 
+            hasTouch: false,
             locale: 'en-IN', 
             timezoneId: 'Asia/Kolkata',
             extraHTTPHeaders: { 
@@ -58,41 +56,24 @@ async function scrapeBookmark(url, screenshotDir) {
             }
         });
 
-        // STEALTH: Hide automation
+        // STEALTH: Hide automation indicators
         await context.addInitScript(() => {
             Object.defineProperty(navigator, 'webdriver', { get: () => undefined });
-            // Mock plugins/languages
             Object.defineProperty(navigator, 'plugins', { get: () => [1, 2, 3, 4, 5] });
             Object.defineProperty(navigator, 'languages', { get: () => ['en-US', 'en'] });
+            window.chrome = { runtime: {} };
         });
 
         const page = await context.newPage();
 
         try {
             console.log(`   -> Navigating to ${url}...`);
-            // Wait for network idle to ensure React apps (Meesho) finish rendering
             await page.goto(url, { waitUntil: 'domcontentloaded', timeout: 60000 });
-            
-            // Give it a moment to paint pixels
-            await page.waitForTimeout(2000);
         } catch (navError) { 
             console.warn(`   ⚠️ Navigation timeout. Proceeding.`); 
         }
         
-        // --- DOM CLEANER (Remove Overlays) ---
-        try {
-            await page.evaluate(() => {
-                const selectors = [
-                    '[class*="modal"]', '[class*="popup"]', '[class*="overlay"]',
-                    '.age-gate', '.cookie-banner', '#install-app-banner'
-                ];
-                selectors.forEach(s => {
-                    document.querySelectorAll(s).forEach(el => el.remove());
-                });
-            });
-        } catch(e) {}
-
-        // Anti-Popup Clicker
+        // Anti-Popup
         const safeClick = async (selector) => {
             try {
                 const el = page.locator(selector).first();
@@ -101,7 +82,7 @@ async function scrapeBookmark(url, screenshotDir) {
         };
         await safeClick('button:has-text("Accept")');
         await safeClick('button:has-text("Close")');
-        await safeClick('[aria-label="Close"]');
+        await safeClick('#sp-cc-accept'); // Amazon specific
 
         try {
             // Scroll Logic
@@ -110,7 +91,7 @@ async function scrapeBookmark(url, screenshotDir) {
                 await new Promise(r => setTimeout(r, 1000));
                 window.scrollTo(0, 0);
             });
-            await page.waitForTimeout(2000); 
+            await page.waitForTimeout(1500); 
         } catch (e) {}
 
         const fileName = `${Date.now()}_${Math.floor(Math.random()*1000)}.jpg`;
@@ -124,11 +105,27 @@ async function scrapeBookmark(url, screenshotDir) {
         const content = await page.content();
         const $ = cheerio.load(content);
         
-        // Mobile-Friendly Title Extraction
-        data.title = $('h1').first().text().trim() || 
-                     $('meta[property="og:title"]').attr('content') || 
-                     $('title').text().trim() || 
-                     data.site_name;
+        // --- TITLE EXTRACTION FIX ---
+        // Prioritize specific IDs before falling back to generic H1
+        const titleSelectors = [
+            '#productTitle',        // Amazon
+            'h1.yhB1nd',            // Flipkart
+            '.pdp-title',           // Myntra
+            'h1.pdp-name',          // Myntra Mobile
+            'h1'                    // Generic
+        ];
+
+        for (const sel of titleSelectors) {
+            const t = $(sel).first().text().trim();
+            if (t && t.length > 5) {
+                data.title = t;
+                break;
+            }
+        }
+        
+        if (!data.title || data.title === 'New Bookmark') {
+            data.title = $('meta[property="og:title"]').attr('content') || data.site_name;
+        }
 
         // Layer 1: JSON-LD
         $('script[type="application/ld+json"]').each((i, el) => {
@@ -146,13 +143,19 @@ async function scrapeBookmark(url, screenshotDir) {
             } catch (e) {}
         });
 
-        // Layer 2: Selectors (Updated for Mobile Layouts)
+        // Layer 2: Selectors
         if (!data.price) {
             const selectors = [
+                // Amazon Specifics (Highest Priority)
+                '.a-price .a-offscreen', // Hidden full price text (e.g. ₹1,499.00)
+                '#priceblock_ourprice',
+                '#priceblock_dealprice',
+                '.a-price-whole',       // Visual whole number
+
+                // Other Sites
                 '.pdp-selling-price', '.pdp-price strong', // Myntra
-                '.a-price .a-offscreen', '.a-price-whole', // Amazon
                 'div[class*="_30jeq3"]', 'div[class*="Nx9bqj"]', // Flipkart
-                'h4', // Meesho Mobile often uses H4
+                'h4', // Meesho
                 '[data-testid="price"]',
                 '.price', '[class*="price"]',
                 'span:contains("₹")', 'span:contains("Rs.")' 
@@ -164,6 +167,7 @@ async function scrapeBookmark(url, screenshotDir) {
                     const el = elements.eq(i);
                     const text = el.text();
                     
+                    // Context Check
                     const context = (el.parent().text() + el.parent().parent().text()).toLowerCase();
                     if (context.includes('orders above') || 
                         context.includes('min purchase') || 
@@ -212,6 +216,7 @@ async function scrapeBookmark(url, screenshotDir) {
     return data;
 }
 
+// Exported for On-Demand OCR
 async function scanImageForPrice(imageRelativePath, publicDir) {
     const fileName = path.basename(imageRelativePath);
     const absPath = path.join(publicDir, 'screenshots', fileName);
@@ -219,6 +224,7 @@ async function scanImageForPrice(imageRelativePath, publicDir) {
     return await extractPriceFromImage(absPath);
 }
 
+// THIS WAS MISSING - ADDED BACK
 function parsePriceAndCurrency(text) {
     if (!text) return { price: null, currency: null };
     let currency = null;
