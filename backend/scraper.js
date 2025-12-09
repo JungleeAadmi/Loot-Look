@@ -172,7 +172,7 @@ async function scrapeBookmark(url, screenshotDir) {
                     if (context.includes('orders above') || 
                         context.includes('min purchase') || 
                         context.includes('save') || 
-                        context.includes('off') ||
+                        context.includes('off') || 
                         context.includes('coupon') ||
                         el.parents('.coupons, .offers').length > 0) {
                         continue; 
@@ -224,6 +224,7 @@ async function scanImageForPrice(imageRelativePath, publicDir) {
     return await extractPriceFromImage(absPath);
 }
 
+// THIS WAS MISSING - ADDED BACK
 function parsePriceAndCurrency(text) {
     if (!text) return { price: null, currency: null };
     let currency = null;
