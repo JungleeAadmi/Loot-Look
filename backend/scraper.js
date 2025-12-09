@@ -27,7 +27,7 @@ async function scrapeBookmark(url, screenshotDir) {
         try { data.site_name = new URL(url).hostname.replace('www.', ''); } 
         catch (e) { data.site_name = 'Web'; }
 
-        // HEADFUL MODE
+        // HEADFUL MODE: Critical for Amazon & Meesho Bot Detection
         browser = await chromium.launch({
             headless: false, 
             args: [
@@ -56,7 +56,7 @@ async function scrapeBookmark(url, screenshotDir) {
             }
         });
 
-        // STEALTH
+        // STEALTH: Hide automation indicators
         await context.addInitScript(() => {
             Object.defineProperty(navigator, 'webdriver', { get: () => undefined });
             Object.defineProperty(navigator, 'plugins', { get: () => [1, 2, 3, 4, 5] });
@@ -82,7 +82,7 @@ async function scrapeBookmark(url, screenshotDir) {
         };
         await safeClick('button:has-text("Accept")');
         await safeClick('button:has-text("Close")');
-        await safeClick('#sp-cc-accept'); 
+        await safeClick('#sp-cc-accept'); // Amazon specific
 
         try {
             // Scroll Logic
@@ -105,7 +105,8 @@ async function scrapeBookmark(url, screenshotDir) {
         const content = await page.content();
         const $ = cheerio.load(content);
         
-        // Title Extraction
+        // --- TITLE EXTRACTION FIX ---
+        // Prioritize specific IDs before falling back to generic H1
         const titleSelectors = [
             '#productTitle',        // Amazon
             'h1.yhB1nd',            // Flipkart
@@ -145,10 +146,16 @@ async function scrapeBookmark(url, screenshotDir) {
         // Layer 2: Selectors
         if (!data.price) {
             const selectors = [
-                '.a-price .a-offscreen', '#priceblock_ourprice', '#priceblock_dealprice', '.a-price-whole',
-                '.pdp-selling-price', '.pdp-price strong',
-                'div[class*="_30jeq3"]', 'div[class*="Nx9bqj"]',
-                'h4', 
+                // Amazon Specifics (Highest Priority)
+                '.a-price .a-offscreen', // Hidden full price text (e.g. ₹1,499.00)
+                '#priceblock_ourprice',
+                '#priceblock_dealprice',
+                '.a-price-whole',       // Visual whole number
+
+                // Other Sites
+                '.pdp-selling-price', '.pdp-price strong', // Myntra
+                'div[class*="_30jeq3"]', 'div[class*="Nx9bqj"]', // Flipkart
+                'h4', // Meesho
                 '[data-testid="price"]',
                 '.price', '[class*="price"]',
                 'span:contains("₹")', 'span:contains("Rs.")' 
@@ -160,18 +167,13 @@ async function scrapeBookmark(url, screenshotDir) {
                     const el = elements.eq(i);
                     const text = el.text();
                     
-                    // --- ENHANCED CONTEXT CHECK ---
-                    // Ignores non-price numbers like "1 Review" or "Qty: 1"
+                    // Context Check
                     const context = (el.parent().text() + el.parent().parent().text()).toLowerCase();
                     if (context.includes('orders above') || 
                         context.includes('min purchase') || 
                         context.includes('save') || 
                         context.includes('off') ||
                         context.includes('coupon') ||
-                        context.includes('qty') ||       // NEW
-                        context.includes('quantity') ||  // NEW
-                        context.includes('star') ||      // NEW: Filters out "4.5 stars"
-                        context.includes('review') ||    // NEW: Filters out "1 review"
                         el.parents('.coupons, .offers').length > 0) {
                         continue; 
                     }
@@ -224,20 +226,13 @@ async function scanImageForPrice(imageRelativePath, publicDir) {
 
 function parsePriceAndCurrency(text) {
     if (!text) return { price: null, currency: null };
-    
     let currency = null;
     for (const [symbol, code] of Object.entries(CURRENCY_MAP)) {
         if (text.includes(symbol)) { currency = code; break; }
     }
-
     const clean = text.replace(/[^0-9.]/g, ''); 
     const num = parseFloat(clean);
-    
-    // --- SAFETY CHECK ---
-    // Reject numbers <= 5 to avoid "1" (Quantity), "4.5" (Stars)
-    // Accept valid prices like 10, 1270, etc.
-    if (isNaN(num) || num <= 5) return { price: null, currency: null };
-    
+    if (isNaN(num) || num < 1) return { price: null, currency: null };
     return { price: num, currency: currency };
 }
 
