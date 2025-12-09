@@ -10,15 +10,6 @@ const CURRENCY_MAP = {
     '$': 'USD', '€': 'EUR', '£': 'GBP', '¥': 'JPY', '₹': 'INR', 'Rs': 'INR', 'RP': 'IDR', 'RM': 'MYR', 'AED': 'AED'
 };
 
-// Helper: Is this price suspiciously low?
-// Most real products cost more than 5 units of currency.
-// This filters out "1" (quantity), "0" (hidden), or "4.5" (rating) being misread as price.
-function isRealisticPrice(price) {
-    if (!price || isNaN(price)) return false;
-    if (price <= 5) return false; 
-    return true;
-}
-
 async function scrapeBookmark(url, screenshotDir) {
     console.log(`🔍 [Scraper] Starting: ${url}`);
     
@@ -40,8 +31,12 @@ async function scrapeBookmark(url, screenshotDir) {
         browser = await chromium.launch({
             headless: false, 
             args: [
-                '--no-sandbox', '--disable-setuid-sandbox', '--disable-dev-shm-usage', '--disable-gpu',
-                '--window-size=1080,1920', '--disable-blink-features=AutomationControlled',
+                '--no-sandbox', 
+                '--disable-setuid-sandbox', 
+                '--disable-dev-shm-usage', 
+                '--disable-gpu',
+                '--window-size=1080,1920', 
+                '--disable-blink-features=AutomationControlled',
                 '--start-maximized'
             ]
         });
@@ -61,6 +56,7 @@ async function scrapeBookmark(url, screenshotDir) {
             }
         });
 
+        // STEALTH
         await context.addInitScript(() => {
             Object.defineProperty(navigator, 'webdriver', { get: () => undefined });
             Object.defineProperty(navigator, 'plugins', { get: () => [1, 2, 3, 4, 5] });
@@ -73,7 +69,9 @@ async function scrapeBookmark(url, screenshotDir) {
         try {
             console.log(`   -> Navigating to ${url}...`);
             await page.goto(url, { waitUntil: 'domcontentloaded', timeout: 60000 });
-        } catch (navError) { console.warn(`   ⚠️ Navigation timeout. Proceeding.`); }
+        } catch (navError) { 
+            console.warn(`   ⚠️ Navigation timeout. Proceeding.`); 
+        }
         
         // Anti-Popup
         const safeClick = async (selector) => {
@@ -108,16 +106,27 @@ async function scrapeBookmark(url, screenshotDir) {
         const $ = cheerio.load(content);
         
         // Title Extraction
-        const titleSelectors = ['#productTitle', 'h1.yhB1nd', '.pdp-title', 'h1.pdp-name', 'h1'];
+        const titleSelectors = [
+            '#productTitle',        // Amazon
+            'h1.yhB1nd',            // Flipkart
+            '.pdp-title',           // Myntra
+            'h1.pdp-name',          // Myntra Mobile
+            'h1'                    // Generic
+        ];
+
         for (const sel of titleSelectors) {
             const t = $(sel).first().text().trim();
-            if (t && t.length > 5) { data.title = t; break; }
+            if (t && t.length > 5) {
+                data.title = t;
+                break;
+            }
         }
+        
         if (!data.title || data.title === 'New Bookmark') {
             data.title = $('meta[property="og:title"]').attr('content') || data.site_name;
         }
 
-        // Layer 1: JSON-LD (Updated with Sanity Check)
+        // Layer 1: JSON-LD
         $('script[type="application/ld+json"]').each((i, el) => {
             try {
                 const json = JSON.parse($(el).html());
@@ -126,17 +135,14 @@ async function scrapeBookmark(url, screenshotDir) {
                 if (product) {
                     const offer = Array.isArray(product.offers) ? product.offers[0] : product.offers;
                     if (offer) {
-                        const p = parseFloat(offer.price);
-                        if (isRealisticPrice(p)) {
-                            data.price = p;
-                            if (offer.priceCurrency) data.currency = offer.priceCurrency;
-                        }
+                        data.price = parseFloat(offer.price);
+                        if (offer.priceCurrency) data.currency = offer.priceCurrency;
                     }
                 }
             } catch (e) {}
         });
 
-        // Layer 2: Selectors (Updated with Sanity Check)
+        // Layer 2: Selectors
         if (!data.price) {
             const selectors = [
                 '.a-price .a-offscreen', '#priceblock_ourprice', '#priceblock_dealprice', '.a-price-whole',
@@ -154,18 +160,24 @@ async function scrapeBookmark(url, screenshotDir) {
                     const el = elements.eq(i);
                     const text = el.text();
                     
+                    // --- ENHANCED CONTEXT CHECK ---
+                    // Ignores non-price numbers like "1 Review" or "Qty: 1"
                     const context = (el.parent().text() + el.parent().parent().text()).toLowerCase();
                     if (context.includes('orders above') || 
                         context.includes('min purchase') || 
                         context.includes('save') || 
                         context.includes('off') ||
                         context.includes('coupon') ||
+                        context.includes('qty') ||       // NEW
+                        context.includes('quantity') ||  // NEW
+                        context.includes('star') ||      // NEW: Filters out "4.5 stars"
+                        context.includes('review') ||    // NEW: Filters out "1 review"
                         el.parents('.coupons, .offers').length > 0) {
                         continue; 
                     }
 
                     const result = parsePriceAndCurrency(text);
-                    if (result.price && isRealisticPrice(result.price)) { 
+                    if (result.price) { 
                         data.price = result.price;
                         if (result.currency) data.currency = result.currency;
                         break; 
@@ -175,23 +187,20 @@ async function scrapeBookmark(url, screenshotDir) {
             }
         }
 
-        // Layer 3: Meta (Updated with Sanity Check)
+        // Layer 3: Meta
         if (!data.price) {
             const metaPrice = $('meta[property="product:price:amount"]').attr('content') || $('meta[property="og:price:amount"]').attr('content');
-            const p = parseFloat(metaPrice);
-            if (isRealisticPrice(p)) {
-                 data.price = p;
-                 const metaCurr = $('meta[property="product:price:currency"]').attr('content');
-                 if (metaCurr) data.currency = metaCurr;
-            }
+            if (metaPrice) data.price = parseFloat(metaPrice);
+            const metaCurr = $('meta[property="product:price:currency"]').attr('content');
+            if (metaCurr) data.currency = metaCurr;
         }
 
-        // Layer 4: OCR Backup (Only if price is missing OR unrealistic)
-        if ((!data.price || !isRealisticPrice(data.price)) && data.imagePath) {
-            console.log("   ⚠️ Standard scraping failed or found bad price. Attempting OCR backup...");
+        // Layer 4: OCR Backup
+        if (!data.price && data.imagePath) {
+            console.log("   ⚠️ Standard scraping failed. Attempting OCR backup...");
             const absPath = path.resolve(screenshotDir, fileName);
             const ocrPrice = await extractPriceFromImage(absPath);
-            if (isRealisticPrice(ocrPrice)) data.price = ocrPrice;
+            if (ocrPrice) data.price = ocrPrice;
         }
 
         if (data.price && !isNaN(data.price)) data.isTracked = true;
@@ -215,13 +224,20 @@ async function scanImageForPrice(imageRelativePath, publicDir) {
 
 function parsePriceAndCurrency(text) {
     if (!text) return { price: null, currency: null };
+    
     let currency = null;
     for (const [symbol, code] of Object.entries(CURRENCY_MAP)) {
         if (text.includes(symbol)) { currency = code; break; }
     }
+
     const clean = text.replace(/[^0-9.]/g, ''); 
     const num = parseFloat(clean);
-    if (isNaN(num) || num <= 5) return { price: null, currency: null }; // Use <= 5 threshold
+    
+    // --- SAFETY CHECK ---
+    // Reject numbers <= 5 to avoid "1" (Quantity), "4.5" (Stars)
+    // Accept valid prices like 10, 1270, etc.
+    if (isNaN(num) || num <= 5) return { price: null, currency: null };
+    
     return { price: num, currency: currency };
 }
 
