@@ -2,13 +2,14 @@ import React, { useState, useEffect } from 'react';
 import { 
   LogOut, ExternalLink, RefreshCw, ShoppingBag, Link as LinkIcon, Loader2,
   Share2, Trash2, Eye, X, Plus, Search, Copy, Download, UserMinus, LogOut as LeaveIcon,
-  ScanSearch, Filter, Bell, TrendingUp // Added TrendingUp Icon
+  ScanSearch, Filter, Bell
 } from 'lucide-react';
 import axios from 'axios';
 import { AreaChart, Area, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid } from 'recharts';
 
 const API_URL = '/api';
 
+// Date Formatter: Dynamic (Uses User's Local Device Time)
 const formatDate = (dateString) => {
   if (!dateString) return 'Never';
   return new Date(dateString).toLocaleString('en-IN', {
@@ -135,6 +136,7 @@ const Dashboard = ({ user, token, onLogout, openSnip, openHistory, openSettings 
   const [newUrl, setNewUrl] = useState('');
   const [shareModalData, setShareModalData] = useState(null); 
   const [filter, setFilter] = useState('All');
+  const [searchQuery, setSearchQuery] = useState(''); // New State for Search
 
   const fetchBookmarks = async (isBackground = false) => {
     if (!isBackground) setSyncing(true);
@@ -187,18 +189,23 @@ const Dashboard = ({ user, token, onLogout, openSnip, openHistory, openSettings 
   };
 
   const sites = ['All', ...new Set(bookmarks.map(b => b.site_name || 'Web'))].sort();
-  const filteredBookmarks = filter === 'All' ? bookmarks : bookmarks.filter(b => (b.site_name || 'Web') === filter);
+  
+  // Updated Filtering Logic: Filter by Site AND Search Query
+  const filteredBookmarks = bookmarks.filter(b => {
+    const matchesFilter = filter === 'All' || (b.site_name || 'Web') === filter;
+    const matchesSearch = b.title.toLowerCase().includes(searchQuery.toLowerCase()) || b.url.toLowerCase().includes(searchQuery.toLowerCase());
+    return matchesFilter && matchesSearch;
+  });
 
   return (
     <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-4 sm:py-8">
       
       {/* RESPONSIVE NAVBAR */}
-      <nav className="flex flex-col xl:flex-row justify-between items-center mb-8 gap-4 glass-panel p-4 rounded-3xl">
+      <nav className="flex flex-col xl:flex-row justify-between items-center mb-4 gap-4 glass-panel p-4 rounded-3xl">
         
         {/* Logo Section */}
         <div className="flex items-center gap-3 w-full xl:w-auto justify-center xl:justify-start">
           <div className="bg-indigo-600/90 p-2.5 rounded-full shadow-lg shadow-indigo-600/30">
-            {/* Nav uses mini logo if available, or icon */}
             <img src="/logo.png" className="w-8 h-8 object-contain" alt="Logo" onError={(e) => e.target.style.display='none'} />
             <ShoppingBag size={24} className="text-white hidden" /> 
           </div>
@@ -234,7 +241,6 @@ const Dashboard = ({ user, token, onLogout, openSnip, openHistory, openSettings 
         {/* Controls Grid */}
         <div className="flex flex-wrap justify-center xl:justify-end gap-2 w-full xl:w-auto">
           
-          {/* Filter Dropdown */}
           <div className="relative flex-grow sm:flex-grow-0">
             <select 
               value={filter} 
@@ -266,22 +272,51 @@ const Dashboard = ({ user, token, onLogout, openSnip, openHistory, openSettings 
         </div>
       </nav>
 
+      {/* SEARCH BAR (New Feature) */}
+      <div className="mb-6 relative w-full max-w-md mx-auto xl:mx-0 xl:max-w-full">
+         <div className="relative">
+            <Search className="absolute left-4 top-1/2 -translate-y-1/2 text-slate-500" size={18} />
+            <input 
+              type="text" 
+              placeholder="Search your stash..." 
+              className="w-full pl-12 pr-4 py-2.5 rounded-xl bg-slate-800/30 border border-white/5 text-white placeholder:text-slate-600 focus:outline-none focus:ring-1 focus:ring-indigo-500/30 text-sm transition-all"
+              value={searchQuery}
+              onChange={(e) => setSearchQuery(e.target.value)}
+            />
+            {searchQuery && (
+              <button 
+                onClick={() => setSearchQuery('')}
+                className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-500 hover:text-white"
+              >
+                <X size={14} />
+              </button>
+            )}
+         </div>
+      </div>
+
       {/* Grid Content */}
       {loading ? (
         <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-6">{[1,2,3,4].map(i => <div key={i} className="h-80 rounded-2xl bg-white/5 animate-pulse border border-white/5"></div>)}</div>
       ) : (
         <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-6">
-          {filteredBookmarks.map(bm => (
-            <BookmarkCard 
-              key={bm.id} 
-              data={bm} 
-              token={token}
-              refreshData={() => fetchBookmarks(true)}
-              onSnip={() => openSnip(bm.image_url)}
-              onHistory={() => openHistory(bm)}
-              onShare={() => setShareModalData(bm)}
-            />
-          ))}
+          {filteredBookmarks.length > 0 ? (
+            filteredBookmarks.map(bm => (
+              <BookmarkCard 
+                key={bm.id} 
+                data={bm} 
+                token={token}
+                refreshData={() => fetchBookmarks(true)}
+                onSnip={() => openSnip(bm.image_url)}
+                onHistory={() => openHistory(bm)}
+                onShare={() => setShareModalData(bm)}
+              />
+            ))
+          ) : (
+            <div className="col-span-full flex flex-col items-center justify-center py-20 text-slate-500">
+              <Search size={40} className="mb-4 opacity-20" />
+              <p>No items found matching "{searchQuery}"</p>
+            </div>
+          )}
         </div>
       )}
 
@@ -382,8 +417,7 @@ const BookmarkCard = ({ data, token, refreshData, onSnip, onShare, onHistory }) 
               {data.previous_price && (<span className="text-xs text-slate-500 line-through mr-2">{fmt(data.previous_price)}</span>)}
               <div className={`text-xl sm:text-2xl font-bold ${priceColor} tracking-tight flex items-center gap-2`}>
                 {fmt(data.current_price)}
-                {/* FIX: Use correct icon for history button */}
-                <TrendingUp size={16} className="text-slate-600 group-hover/price:text-indigo-400 transition-colors opacity-0 group-hover/price:opacity-100" />
+                <AreaChart size={14} className="text-slate-600 group-hover/price:text-indigo-400 transition-colors opacity-0 group-hover/price:opacity-100" />
               </div>
             </div>
           ) : (
