@@ -2,7 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { 
   LogOut, ExternalLink, RefreshCw, ShoppingBag, Link as LinkIcon, Loader2,
   Share2, Trash2, Eye, X, Plus, Search, Copy, Download, UserMinus, LogOut as LeaveIcon,
-  ScanSearch, Filter, Bell, TrendingUp, ClipboardPaste // Added ClipboardPaste icon
+  ScanSearch, Filter, Bell, TrendingUp, ClipboardPaste
 } from 'lucide-react';
 import axios from 'axios';
 import { AreaChart, Area, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid } from 'recharts';
@@ -168,16 +168,22 @@ const Dashboard = ({ user, token, onLogout, openSnip, openHistory, openSettings 
     finally { setAdding(false); }
   };
 
-  // PASTE HANDLER (New Feature)
+  // UPDATED PASTE HANDLER
   const handlePaste = async () => {
+    // Check if Clipboard API is available (It is usually undefined on HTTP sites)
+    if (!navigator.clipboard) {
+      alert("Clipboard access requires HTTPS. Please paste manually.");
+      return;
+    }
+
     try {
       const text = await navigator.clipboard.readText();
       if (text) {
         setNewUrl(text);
       }
     } catch (err) {
-      // Browsers block clipboard access if permission isn't granted or context is insecure
-      alert('Unable to access clipboard. Please paste manually.');
+      // Permission denied or other browser block
+      alert('Browser blocked clipboard access. Please allow permission or paste manually.');
     }
   };
 
