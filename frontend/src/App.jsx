@@ -2,7 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { 
   LogOut, ExternalLink, RefreshCw, ShoppingBag, Link as LinkIcon, Loader2,
   Share2, Trash2, Eye, X, Plus, Search, Copy, Download, UserMinus, LogOut as LeaveIcon,
-  ScanSearch, Filter, Bell
+  ScanSearch, Filter, Bell, TrendingUp, ClipboardPaste // Added ClipboardPaste icon
 } from 'lucide-react';
 import axios from 'axios';
 import { AreaChart, Area, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid } from 'recharts';
@@ -136,7 +136,7 @@ const Dashboard = ({ user, token, onLogout, openSnip, openHistory, openSettings 
   const [newUrl, setNewUrl] = useState('');
   const [shareModalData, setShareModalData] = useState(null); 
   const [filter, setFilter] = useState('All');
-  const [searchQuery, setSearchQuery] = useState(''); // New State for Search
+  const [searchQuery, setSearchQuery] = useState('');
 
   const fetchBookmarks = async (isBackground = false) => {
     if (!isBackground) setSyncing(true);
@@ -168,6 +168,19 @@ const Dashboard = ({ user, token, onLogout, openSnip, openHistory, openSettings 
     finally { setAdding(false); }
   };
 
+  // PASTE HANDLER (New Feature)
+  const handlePaste = async () => {
+    try {
+      const text = await navigator.clipboard.readText();
+      if (text) {
+        setNewUrl(text);
+      }
+    } catch (err) {
+      // Browsers block clipboard access if permission isn't granted or context is insecure
+      alert('Unable to access clipboard. Please paste manually.');
+    }
+  };
+
   const downloadCSV = () => {
     const headers = ["Title", "Price", "Currency", "URL", "Added Date", "Last Checked"];
     const rows = bookmarks.map(b => [
@@ -190,7 +203,6 @@ const Dashboard = ({ user, token, onLogout, openSnip, openHistory, openSettings 
 
   const sites = ['All', ...new Set(bookmarks.map(b => b.site_name || 'Web'))].sort();
   
-  // Updated Filtering Logic: Filter by Site AND Search Query
   const filteredBookmarks = bookmarks.filter(b => {
     const matchesFilter = filter === 'All' || (b.site_name || 'Web') === filter;
     const matchesSearch = b.title.toLowerCase().includes(searchQuery.toLowerCase()) || b.url.toLowerCase().includes(searchQuery.toLowerCase());
@@ -215,20 +227,34 @@ const Dashboard = ({ user, token, onLogout, openSnip, openHistory, openSettings 
           </div>
         </div>
         
-        {/* Add Link Bar */}
-        <form onSubmit={handleAdd} className="relative group w-full xl:max-w-lg xl:mx-4">
+        {/* Add Link Bar with PASTE Button */}
+        <form onSubmit={handleAdd} className="relative group w-full xl:max-w-lg xl:mx-4 flex items-center">
           <div className="absolute left-4 top-1/2 -translate-y-1/2 text-slate-400">
             {adding ? <Loader2 className="animate-spin" size={18} /> : <Plus size={18} />}
           </div>
+          
           <input 
             type="url" 
             placeholder="Paste link to track..." 
-            className="w-full pl-12 pr-20 py-3 rounded-xl bg-slate-900/50 border border-white/10 text-white focus:outline-none focus:ring-2 focus:ring-indigo-500/50 text-sm placeholder:text-slate-500" 
+            className="w-full pl-12 pr-28 py-3 rounded-xl bg-slate-900/50 border border-white/10 text-white focus:outline-none focus:ring-2 focus:ring-indigo-500/50 text-sm placeholder:text-slate-500" 
             value={newUrl} 
             onChange={(e) => setNewUrl(e.target.value)} 
             required 
             disabled={adding} 
           />
+          
+          {/* Paste Button (Only visible if input is empty) */}
+          {!newUrl && (
+            <button
+              type="button"
+              onClick={handlePaste}
+              className="absolute right-16 top-1.5 bottom-1.5 px-3 text-slate-400 hover:text-indigo-400 transition-colors"
+              title="Paste from Clipboard"
+            >
+              <ClipboardPaste size={18} />
+            </button>
+          )}
+
           <button 
             type="submit" 
             disabled={adding} 
@@ -272,7 +298,7 @@ const Dashboard = ({ user, token, onLogout, openSnip, openHistory, openSettings 
         </div>
       </nav>
 
-      {/* SEARCH BAR (New Feature) */}
+      {/* SEARCH BAR */}
       <div className="mb-6 relative w-full max-w-md mx-auto xl:mx-0 xl:max-w-full">
          <div className="relative">
             <Search className="absolute left-4 top-1/2 -translate-y-1/2 text-slate-500" size={18} />
@@ -417,7 +443,7 @@ const BookmarkCard = ({ data, token, refreshData, onSnip, onShare, onHistory }) 
               {data.previous_price && (<span className="text-xs text-slate-500 line-through mr-2">{fmt(data.previous_price)}</span>)}
               <div className={`text-xl sm:text-2xl font-bold ${priceColor} tracking-tight flex items-center gap-2`}>
                 {fmt(data.current_price)}
-                <AreaChart size={14} className="text-slate-600 group-hover/price:text-indigo-400 transition-colors opacity-0 group-hover/price:opacity-100" />
+                <TrendingUp size={16} className="text-slate-600 group-hover/price:text-indigo-400 transition-colors opacity-0 group-hover/price:opacity-100" />
               </div>
             </div>
           ) : (
